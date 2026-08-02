@@ -16,6 +16,9 @@ func TestParseMultibandDefaults(t *testing.T) {
 	if cfg.MaxConnections != 5 || cfg.MaxRemoteConnections != 4 {
 		t.Fatalf("unexpected limits: %+v", cfg)
 	}
+	if cfg.LogLevel != "info" {
+		t.Fatalf("unexpected log level: %s", cfg.LogLevel)
+	}
 }
 
 func TestParseUnknownTargetRequiresSerial(t *testing.T) {
