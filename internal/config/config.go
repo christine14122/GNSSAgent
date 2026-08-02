@@ -37,6 +37,9 @@ func Parse(args []string, target string) (Config, error) {
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err
 	}
+	if fs.NArg() != 0 {
+		return Config{}, fmt.Errorf("unexpected positional arguments: %v", fs.Args())
+	}
 	if cfg.SerialDevice == "" {
 		return Config{}, errors.New("serial device is required for this target")
 	}
@@ -46,7 +49,10 @@ func Parse(args []string, target string) (Config, error) {
 	if cfg.MaxConnections < 1 {
 		return Config{}, errors.New("max-connections must be positive")
 	}
-	if cfg.MaxRemoteConnections < 0 || cfg.MaxRemoteConnections >= cfg.MaxConnections {
+	if cfg.MaxRemoteConnections < 0 {
+		return Config{}, errors.New("max-remote-connections must be non-negative")
+	}
+	if cfg.MaxRemoteConnections >= cfg.MaxConnections {
 		return Config{}, errors.New("max-remote-connections must leave at least one loopback slot")
 	}
 	return cfg, nil
