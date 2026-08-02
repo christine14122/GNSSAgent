@@ -1,0 +1,6 @@
+/.worktrees/
+/build/dist/
+/build/compiler/.go*/
+*.test
+*.out
+coverage.txt
