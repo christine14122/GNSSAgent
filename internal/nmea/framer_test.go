@@ -52,6 +52,62 @@ func TestFramerDiscardsOverlongCandidateUntilNextDollar(t *testing.T) {
 	}
 }
 
+func TestFramerAcceptsExactMaximumLengthWithLF(t *testing.T) {
+	f := NewFramer(5)
+	got := f.Feed([]byte("$1234\n"))
+	if len(got) != 1 || string(got[0]) != "$1234" {
+		t.Fatalf("frames=%q", got)
+	}
+}
+
+func TestFramerAcceptsExactMaximumLengthWithCRLF(t *testing.T) {
+	f := NewFramer(5)
+	got := f.Feed([]byte("$1234\r\n"))
+	if len(got) != 1 || string(got[0]) != "$1234" {
+		t.Fatalf("frames=%q", got)
+	}
+}
+
+func TestFramerAcceptsExactMaximumLengthWithSplitCRLF(t *testing.T) {
+	f := NewFramer(5)
+	if got := f.Feed([]byte("$1234\r")); len(got) != 0 {
+		t.Fatalf("unexpected frame before LF: %q", got)
+	}
+	got := f.Feed([]byte("\n"))
+	if len(got) != 1 || string(got[0]) != "$1234" {
+		t.Fatalf("frames=%q", got)
+	}
+}
+
+func TestFramerDropsMaximumLengthPlusOne(t *testing.T) {
+	tests := []struct {
+		name       string
+		terminator string
+	}{
+		{name: "LF", terminator: "\n"},
+		{name: "CRLF", terminator: "\r\n"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			f := NewFramer(5)
+			if got := f.Feed([]byte("$12345" + test.terminator)); len(got) != 0 {
+				t.Fatalf("unexpected frame: %q", got)
+			}
+		})
+	}
+}
+
+func TestFramerDropsPendingCRFollowedByNonLFAndRecovers(t *testing.T) {
+	f := NewFramer(5)
+	if got := f.Feed([]byte("$1234\rX\n")); len(got) != 0 {
+		t.Fatalf("unexpected overlong frame: %q", got)
+	}
+	got := f.Feed([]byte("noise$A\n"))
+	if len(got) != 1 || string(got[0]) != "$A" {
+		t.Fatalf("frames=%q", got)
+	}
+}
+
 func TestValidateChecksum(t *testing.T) {
 	if err := ValidateChecksum([]byte("$GPGSV,1,1,00*79")); err != nil {
 		t.Fatal(err)

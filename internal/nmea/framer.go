@@ -43,7 +43,8 @@ func (f *Framer) Feed(data []byte) [][]byte {
 		}
 
 		f.buf = append(f.buf, b)
-		if len(f.buf) > f.max {
+		pendingCR := b == '\r' && len(f.buf)-1 == f.max
+		if len(f.buf) > f.max && !pendingCR {
 			f.buf = f.buf[:0]
 			f.discarding = true
 		}
