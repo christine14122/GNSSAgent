@@ -255,24 +255,26 @@ FULL 载荷固定为 124 字节：
 
 ### 9.4 卫星统计
 
-- 卫星身份按以下优先级确定：GSA System ID、明确星座的 talker、本周期完整 GSV 的唯一 PRN 匹配、经目标实机确认的 PRN 区间映射。
-- 没有实机证据时不得写死厂商 PRN 区间，也不得按 GSA 出现顺序猜测星座。
-- `used_satellites` 优先使用 GGA 数量；GGA 缺失时按已确定身份去重并处理未确定 PRN 歧义。
-- 无法排除同一原始 PRN 表示一颗或多颗卫星时，GSA 回退得到的 `used_satellites` 整体无效。
+- 卫星身份严格按以下优先级确定：① GSA System ID；② 能指明星座的 talker（`GP`、`BD`/`GB`、`GL`、`GA`）；③ 本周期完整 GSV 中仅有一个星座包含该原始 PRN 的唯一匹配；④ 经当前目标实机确认的 PRN 区间映射。没有实机证据时不得写死厂商相关 PRN 区间，也不得按多条 GSA 的出现顺序绑定星座。
+- 当前 MultibandRadio 的 `GNGSA` 没有 System ID，首次实现不得假定其中 PRN 的星座。完整 GSV 中同一原始 PRN 同时出现在多个星座时仍为歧义。
+- `used_satellites` 优先使用 GGA 数量。GGA 缺失时：已确定星座的卫星按“星座 + PRN”去重；对未确定星座的 GN GSA，先收集所有非空原始 PRN。若每个原始 PRN 只出现一次且不与已确定身份集合中的原始 PRN 重号，则每个槽计为一颗；若某个未确定 PRN 在多条 GSA 中重复，或与已确定集合中的原始 PRN 相同，且不能通过唯一 GSV 匹配消除歧义，则 `used_satellites` 整体无效，不能猜测它是一颗还是多颗卫星。
 - GGA 与 GSA 数量冲突时使用 GGA，并记录限频告警。
 - 四个星座计数字段表示可见卫星，不表示参与定位卫星。
-- `avg_used_cn0` 只统计 GSA 标记为使用、身份可唯一关联且在完整 GSV 中有有效 C/N0 的卫星。
-- GSV 缺包时对应星座计数和相关平均 C/N0 无效。
+- 只有 talker 或卫星编号能明确归属星座时才计数；无法明确归属时对应有效位不置 1。
+- `avg_used_cn0` 只统计 GSA 标记为参与定位、身份可唯一关联，并且在本周期完整 GSV 中找到有效 C/N0 的卫星。歧义 PRN 不参与平均；没有唯一匹配项或 GSV 不完整时该字段无效。
+- 声明 0 颗卫星且分包完整的 GSV 周期，其星座计数字段有效且值为 0；这不能与 GSV 缺失或缺包混淆。
 
 ### 9.5 DOP
 
-- `gga_hdop` 与三项 GSA DOP 独立，不能互相回填。
-- GGA quality 为 0 时 `gga_hdop` 无效。
-- GSA fix type 为 1 时，该条 GSA 的三项 DOP 无效。
-- 任一 DOP 等于当前接收机无定位哨兵 `127.000` 时，对应 GGA DOP 或整组 GSA DOP 无效。
-- 多组有效 GSA DOP 的十进制千分位差值均不超过 10 时，采用本周期第一组；任一项差值大于 10 时三项全部无效。
-- 千分位转换必须直接从十进制字段文本按 half-up 规则生成，不得经过二进制浮点。
-- `fix_dimension` 取本周期所有可解析 GSA fix type 的最大值。
+`gga_hdop` 与 `gsa_hdop` 是两个独立字段，不能互相回填。DOP 的有效性规则如下：
+
+- GGA quality 为 0 时，`gga_hdop` 无效，即使字段文本存在且可解析。
+- GSA fix type 为 1 时，该条 GSA 的 PDOP/HDOP/VDOP 无效。
+- 当前接收机使用 `127.000` 表示无定位 DOP；任一 DOP 等于 127.000 时，该条 GSA 的三项 DOP 整组无效，GGA 的 127.000 HDOP 也无效。
+- 一个周期只有一组完整有效 GSA DOP 时，直接采用该组。
+- 一个周期存在多组完整有效 GSA DOP 时，比较值必须直接从 NMEA 十进制字段文本生成，转换过程不得经过 binary32/binary64：按 `.` 拆分整数和小数部分；小数不足 3 位右补 0；超过 3 位时查看第 4 位，第 4 位为 5–9 则把前三位小数表示的整数加 1，并正确处理向整数部分的进位；第 5 位及以后不再影响 half-up 结果。最终得到 `dop_milli = integer_part × 1000 + rounded_fraction_milli`。三项 `dop_milli` 的组间差值都不超过 10（即 0.010，包含边界）时视为一致，并上报本周期第一组有效 GSA DOP 的原始解析值；任一项差值大于 10 时，三项 GSA DOP 全部无效并记录限频告警。不得取最后一条、最小值或平均值。
+- 多条 GSA 的 `fix_dimension` 取所有可解析 fix type 的最大值；没有可解析值时该字段无效。
+- 本周期没有有效 GSA DOP 时，`gsa_pdop`、`gsa_hdop`、`gsa_vdop` 均无效，但不影响有效的 `gga_hdop`。
 
 ### 9.6 高度和时间
 
@@ -409,8 +411,10 @@ SIMPLE 载荷固定为 58 字节，拥有独立的 0–8 位有效掩码：
 - GGA HDOP 与 GSA 三项 DOP 独立。
 - `127.000` DOP 哨兵清除对应有效位。
 - GGA/GSA used satellites 优先和歧义回退规则。
-- 多条 GSA 的 System ID、talker、GSV 唯一匹配和 PRN 重号场景。
-- 多组 GSA DOP 千分位差值 0、10、11；包含 `0.4895` 与 `0.5005` 回归用例。
+- 多条 GSA 覆盖 System ID、星座 talker、GSV 唯一匹配、GN 无 System ID 且 PRN 唯一，以及 GN 无 System ID 且 PRN 重号歧义。
+- GGA 缺失时，未确定星座的原始 PRN 均只出现一次且不与已确定身份集合重号，每个槽计为一颗。
+- GGA 缺失时，未确定 PRN 在多条 GSA 中重复，或与已确定身份集合中的原始 PRN 重号，且不能通过唯一 GSV 匹配消除歧义，`used_satellites` 整体无效。
+- 多组 GSA DOP 千分位差值 0、10、11；包含 `0.4895 → 490`、`0.5005 → 501` 和 `0.9995 → 1000` 回归用例，证明转换未经过二进制浮点且能正确向整数部分进位。
 - GSV 完整、缺包、乱序和四星座计数。
 - `GPGSV,1,1,00` 的有效 0 颗卫星语义。
 - `avg_used_cn0` 关联、去重和无匹配失效。
