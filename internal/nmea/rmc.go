@@ -11,8 +11,8 @@ func parseRMC(fields [][]byte) *RMC {
 		Status:      byteField(textAt(fields, 1)),
 		Latitude:    coordinateField(textAt(fields, 2), textAt(fields, 3), 2, 90),
 		Longitude:   coordinateField(textAt(fields, 4), textAt(fields, 5), 3, 180),
-		SpeedKnots:  float64Field(textAt(fields, 6)),
-		CourseDeg:   float64Field(textAt(fields, 7)),
+		SpeedKnots:  nonNegativeFloat64Field(textAt(fields, 6)),
+		CourseDeg:   float64RangeField(textAt(fields, 7), false, 0, 360, false),
 	}
 }
 

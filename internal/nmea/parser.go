@@ -53,7 +53,10 @@ func textAt(fields [][]byte, index int) string {
 	return string(fields[index])
 }
 
-func float64Field(text string) Field[float64] {
+func float64Field(text string, allowNegative bool) Field[float64] {
+	if !nmeaDecimal(text, allowNegative) {
+		return Field[float64]{}
+	}
 	value, err := strconv.ParseFloat(text, 64)
 	if err != nil || math.IsNaN(value) || math.IsInf(value, 0) {
 		return Field[float64]{}
@@ -61,12 +64,56 @@ func float64Field(text string) Field[float64] {
 	return Field[float64]{Value: value, Valid: true}
 }
 
-func float32Field(text string) Field[float32] {
-	value, err := strconv.ParseFloat(text, 32)
-	if err != nil || math.IsNaN(value) || math.IsInf(value, 0) {
+func float64RangeField(text string, allowNegative bool, minimum, maximum float64, maximumInclusive bool) Field[float64] {
+	field := float64Field(text, allowNegative)
+	if !field.Valid || field.Value < minimum || (maximumInclusive && field.Value > maximum) || (!maximumInclusive && field.Value >= maximum) {
+		return Field[float64]{}
+	}
+	return field
+}
+
+func nonNegativeFloat64Field(text string) Field[float64] {
+	return float64RangeField(text, false, 0, math.Inf(1), true)
+}
+
+func float32RangeField(text string, minimum, maximum float64, maximumInclusive bool) Field[float32] {
+	field := float64RangeField(text, false, minimum, maximum, maximumInclusive)
+	if !field.Valid || field.Value > math.MaxFloat32 {
 		return Field[float32]{}
 	}
-	return Field[float32]{Value: float32(value), Valid: true}
+	return Field[float32]{Value: float32(field.Value), Valid: true}
+}
+
+func nonNegativeFloat32Field(text string) Field[float32] {
+	return float32RangeField(text, 0, math.MaxFloat32, true)
+}
+
+func nmeaDecimal(text string, allowNegative bool) bool {
+	if text == "" {
+		return false
+	}
+	start := 0
+	if text[0] == '-' {
+		if !allowNegative || len(text) == 1 {
+			return false
+		}
+		start = 1
+	}
+
+	dot := -1
+	for i := start; i < len(text); i++ {
+		if text[i] == '.' {
+			if dot >= 0 || i == start || i == len(text)-1 {
+				return false
+			}
+			dot = i
+			continue
+		}
+		if text[i] < '0' || text[i] > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func uint8Field(text string) Field[uint8] {
@@ -80,15 +127,15 @@ func uint8Field(text string) Field[uint8] {
 	return Field[uint8]{Value: uint8(value), Valid: true}
 }
 
-func intValue(text string) int {
+func positiveInt(text string) (int, bool) {
 	if !decimalDigits(text) {
-		return 0
+		return 0, false
 	}
 	value, err := strconv.ParseUint(text, 10, strconv.IntSize)
-	if err != nil {
-		return 0
+	if err != nil || value == 0 {
+		return 0, false
 	}
-	return int(value)
+	return int(value), true
 }
 
 func decimalDigits(text string) bool {

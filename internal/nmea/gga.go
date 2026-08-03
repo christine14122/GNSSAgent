@@ -10,8 +10,8 @@ func parseGGA(fields [][]byte) *GGA {
 		Quality:         uint8Field(textAt(fields, 5)),
 		UsedSatellites:  uint8Field(textAt(fields, 6)),
 		HDOPText:        textAt(fields, 7),
-		AltitudeMSL:     float64Field(textAt(fields, 8)),
-		GeoidSeparation: float64Field(textAt(fields, 10)),
-		DifferentialAge: float64Field(textAt(fields, 12)),
+		AltitudeMSL:     float64Field(textAt(fields, 8), true),
+		GeoidSeparation: float64Field(textAt(fields, 10), true),
+		DifferentialAge: nonNegativeFloat64Field(textAt(fields, 12)),
 	}
 }

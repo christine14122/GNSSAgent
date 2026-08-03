@@ -5,12 +5,12 @@ func parseGST(fields [][]byte) *GST {
 	return &GST{
 		MillisOfDay:    millis,
 		TimeValid:      timeValid,
-		PseudorangeRMS: float64Field(textAt(fields, 1)),
-		SemiMajorError: float64Field(textAt(fields, 2)),
-		SemiMinorError: float64Field(textAt(fields, 3)),
-		OrientationDeg: float64Field(textAt(fields, 4)),
-		LatitudeError:  float64Field(textAt(fields, 5)),
-		LongitudeError: float64Field(textAt(fields, 6)),
-		AltitudeError:  float64Field(textAt(fields, 7)),
+		PseudorangeRMS: nonNegativeFloat64Field(textAt(fields, 1)),
+		SemiMajorError: nonNegativeFloat64Field(textAt(fields, 2)),
+		SemiMinorError: nonNegativeFloat64Field(textAt(fields, 3)),
+		OrientationDeg: float64RangeField(textAt(fields, 4), false, 0, 360, false),
+		LatitudeError:  nonNegativeFloat64Field(textAt(fields, 5)),
+		LongitudeError: nonNegativeFloat64Field(textAt(fields, 6)),
+		AltitudeError:  nonNegativeFloat64Field(textAt(fields, 7)),
 	}
 }
