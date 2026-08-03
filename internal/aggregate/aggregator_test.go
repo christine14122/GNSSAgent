@@ -281,6 +281,155 @@ func TestPreEpochReceiveTimeNeverWraps(t *testing.T) {
 	}
 }
 
+func TestReviewInvalidNavigationKeepsIndependentPositionFields(t *testing.T) {
+	base := time.Unix(7_000, 0)
+	tests := []struct {
+		name     string
+		sentence nmea.Sentence
+		wantLat  float64
+		wantLon  float64
+	}{
+		{
+			name: "RMC void",
+			sentence: nmea.Sentence{Kind: nmea.KindRMC, ReceivedAt: base, RMC: &nmea.RMC{
+				Status: field(byte('V')), Latitude: field(31.25), Longitude: field(118.75),
+			}},
+			wantLat: 31.25, wantLon: 118.75,
+		},
+		{
+			name: "GGA quality zero",
+			sentence: nmea.Sentence{Kind: nmea.KindGGA, ReceivedAt: base, GGA: &nmea.GGA{
+				Quality: field(uint8(0)), Latitude: field(-32.5), Longitude: field(-120.5),
+			}},
+			wantLat: -32.5, wantLon: -120.5,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := aggregateSentences(t, []nmea.Sentence{tt.sentence})
+			wantMask := model.FullValidValid | model.FullLatitudeValid | model.FullLongitudeValid
+			if got.FieldValidityMask&wantMask != wantMask || got.Valid != 0 || got.Latitude != tt.wantLat || got.Longitude != tt.wantLon {
+				t.Fatalf("invalid navigation coupled to position: %+v", got)
+			}
+		})
+	}
+}
+
+func TestReviewZeroGeoidMakesValidEllipsoid(t *testing.T) {
+	base := time.Unix(7_100, 0)
+	got := aggregateSentences(t, []nmea.Sentence{{Kind: nmea.KindGGA, ReceivedAt: base, GGA: &nmea.GGA{
+		Quality: field(uint8(1)), AltitudeMSL: field(45.25), GeoidSeparation: field(0.0),
+	}}})
+	if got.FieldValidityMask&model.FullAltitudeEllipsoidValid == 0 || got.AltitudeEllipsoid != 45.25 {
+		t.Fatalf("zero geoid treated as a placeholder despite valid fix: %+v", got)
+	}
+}
+
+func TestReviewZeroGroundSpeedIsValid(t *testing.T) {
+	base := time.Unix(7_200, 0)
+	got := aggregateSentences(t, []nmea.Sentence{{Kind: nmea.KindRMC, ReceivedAt: base, RMC: &nmea.RMC{
+		SpeedKnots: field(0.0),
+	}}})
+	if got.FieldValidityMask&model.FullGroundSpeedValid == 0 || got.GroundSpeedMPS != 0 {
+		t.Fatalf("zero ground speed lost validity: %+v", got)
+	}
+}
+
+func TestReviewGSTFieldsHaveIndependentMasksAndValues(t *testing.T) {
+	base := time.Unix(7_300, 0)
+	tests := []struct {
+		name     string
+		bit      uint64
+		value    float64
+		gstField func(*nmea.GST) *nmea.Field[float64]
+		read     func(model.FullStatus) float32
+	}{
+		{name: "pseudorange RMS", bit: model.FullGSTPseudorangeRMSValid, value: 1.01, gstField: func(g *nmea.GST) *nmea.Field[float64] { return &g.PseudorangeRMS }, read: func(s model.FullStatus) float32 { return s.GSTPseudorangeRMS }},
+		{name: "semi major", bit: model.FullGSTSemiMajorValid, value: 2.02, gstField: func(g *nmea.GST) *nmea.Field[float64] { return &g.SemiMajorError }, read: func(s model.FullStatus) float32 { return s.GSTSemiMajorError }},
+		{name: "semi minor", bit: model.FullGSTSemiMinorValid, value: 3.03, gstField: func(g *nmea.GST) *nmea.Field[float64] { return &g.SemiMinorError }, read: func(s model.FullStatus) float32 { return s.GSTSemiMinorError }},
+		{name: "orientation", bit: model.FullGSTOrientationValid, value: 40.04, gstField: func(g *nmea.GST) *nmea.Field[float64] { return &g.OrientationDeg }, read: func(s model.FullStatus) float32 { return s.GSTOrientationDeg }},
+		{name: "latitude error", bit: model.FullGSTLatitudeErrorValid, value: 5.05, gstField: func(g *nmea.GST) *nmea.Field[float64] { return &g.LatitudeError }, read: func(s model.FullStatus) float32 { return s.GSTLatitudeError }},
+		{name: "longitude error", bit: model.FullGSTLongitudeErrorValid, value: 6.06, gstField: func(g *nmea.GST) *nmea.Field[float64] { return &g.LongitudeError }, read: func(s model.FullStatus) float32 { return s.GSTLongitudeError }},
+		{name: "altitude error", bit: model.FullGSTAltitudeErrorValid, value: 7.07, gstField: func(g *nmea.GST) *nmea.Field[float64] { return &g.AltitudeError }, read: func(s model.FullStatus) float32 { return s.GSTAltitudeError }},
+	}
+	const allGSTBits = model.FullGSTPseudorangeRMSValid | model.FullGSTSemiMajorValid | model.FullGSTSemiMinorValid |
+		model.FullGSTOrientationValid | model.FullGSTLatitudeErrorValid | model.FullGSTLongitudeErrorValid | model.FullGSTAltitudeErrorValid
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gst := &nmea.GST{}
+			*tt.gstField(gst) = field(tt.value)
+			got := aggregateSentences(t, []nmea.Sentence{{Kind: nmea.KindGST, ReceivedAt: base, GST: gst}})
+			if got.FieldValidityMask&allGSTBits != tt.bit || tt.read(got) != float32(tt.value) {
+				t.Fatalf("GST field mask/value coupled: %+v", got)
+			}
+			for _, sibling := range tests {
+				if sibling.bit != tt.bit && sibling.read(got) != 0 {
+					t.Fatalf("invalid GST sibling %q carried value %v: %+v", sibling.name, sibling.read(got), got)
+				}
+			}
+		})
+	}
+}
+
+func TestReviewDOPInvalidInputsRemainIndependent(t *testing.T) {
+	base := time.Unix(7_400, 0)
+	t.Run("GGA sentinel", func(t *testing.T) {
+		got := aggregateSentences(t, []nmea.Sentence{{Kind: nmea.KindGGA, ReceivedAt: base, GGA: &nmea.GGA{
+			Quality: field(uint8(1)), HDOPText: "127.000",
+		}}})
+		if got.FieldValidityMask&model.FullGGAHDOPValid != 0 || got.GGAHDOP != 0 {
+			t.Fatalf("GGA sentinel published: %+v", got)
+		}
+	})
+
+	t.Run("invalid GSA group is ignored beside usable group", func(t *testing.T) {
+		got := aggregateSentences(t, []nmea.Sentence{
+			gsaSentence(base, "GN", 3, field(uint8(3)), nil, "bad", "0.8", "1.0"),
+			gsaSentence(base, "GN", 3, field(uint8(3)), nil, "1.25", "0.75", "1.00"),
+		})
+		wantMask := model.FullGSAPDOPValid | model.FullGSAHDOPValid | model.FullGSAVDOPValid
+		if got.FieldValidityMask&wantMask != wantMask || got.GSAPDOP != 1.25 || got.GSAHDOP != 0.75 || got.GSAVDOP != 1.0 {
+			t.Fatalf("unusable group invalidated usable group: %+v", got)
+		}
+	})
+}
+
+func TestReviewTimedGGAAndGSTDriveCycleTransitions(t *testing.T) {
+	base := time.Unix(7_500, 0)
+	tests := []struct {
+		name string
+		make func(received time.Time, millis int64) nmea.Sentence
+	}{
+		{
+			name: "GGA",
+			make: func(received time.Time, millis int64) nmea.Sentence {
+				return nmea.Sentence{Kind: nmea.KindGGA, ReceivedAt: received, GGA: &nmea.GGA{MillisOfDay: millis, TimeValid: true}}
+			},
+		},
+		{
+			name: "GST",
+			make: func(received time.Time, millis int64) nmea.Sentence {
+				return nmea.Sentence{Kind: nmea.KindGST, ReceivedAt: received, GST: &nmea.GST{MillisOfDay: millis, TimeValid: true}}
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			a := New()
+			if _, ok := a.Add(tt.make(base, 10_100)); ok {
+				t.Fatal("first timed sentence published")
+			}
+			if _, ok := a.Add(tt.make(base.Add(100*time.Millisecond), 10_999)); ok {
+				t.Fatal("same-second sentence published")
+			}
+			got, ok := a.Add(tt.make(base.Add(time.Second), 11_000))
+			if !ok || got.RecvTime != uint64(base.UnixMilli()) {
+				t.Fatalf("next-second transition=(%+v, %t)", got, ok)
+			}
+		})
+	}
+}
+
 func aggregateSentences(t *testing.T, sentences []nmea.Sentence) model.FullStatus {
 	t.Helper()
 	if len(sentences) == 0 {
