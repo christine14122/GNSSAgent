@@ -5,6 +5,8 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"math"
+	"runtime"
+	"strings"
 	"testing"
 
 	"gnssagent/internal/model"
@@ -49,18 +51,18 @@ func TestProtocolEnumValues(t *testing.T) {
 		{name: "subscribe internal error", got: uint8(SubscribeInternalError), want: 4},
 		{name: "subscribe invalid status type", got: uint8(SubscribeInvalidStatusType), want: 5},
 
-		{name: "GNSS GPS", got: TypeGPS, want: 1},
-		{name: "GNSS BeiDou", got: TypeBeiDou, want: 2},
-		{name: "GNSS GPS plus BeiDou", got: TypeGPSBeiDou, want: 3},
+		{name: "GNSS GPS", got: uint8(TypeGPS), want: 1},
+		{name: "GNSS BeiDou", got: uint8(TypeBeiDou), want: 2},
+		{name: "GNSS GPS plus BeiDou", got: uint8(TypeGPSBeiDou), want: 3},
 
-		{name: "switch success", got: SwitchSuccess, want: 0},
-		{name: "switch invalid argument", got: SwitchInvalidArgument, want: 1},
-		{name: "switch forbidden", got: SwitchForbidden, want: 2},
-		{name: "switch serial unavailable", got: SwitchSerialUnavailable, want: 3},
-		{name: "switch timeout", got: SwitchTimeout, want: 4},
-		{name: "switch verify failed", got: SwitchVerifyFailed, want: 5},
-		{name: "switch internal error", got: SwitchInternalError, want: 6},
-		{name: "switch busy", got: SwitchBusy, want: 7},
+		{name: "switch success", got: uint8(SwitchSuccess), want: 0},
+		{name: "switch invalid argument", got: uint8(SwitchInvalidArgument), want: 1},
+		{name: "switch forbidden", got: uint8(SwitchForbidden), want: 2},
+		{name: "switch serial unavailable", got: uint8(SwitchSerialUnavailable), want: 3},
+		{name: "switch timeout", got: uint8(SwitchTimeout), want: 4},
+		{name: "switch verify failed", got: uint8(SwitchVerifyFailed), want: 5},
+		{name: "switch internal error", got: uint8(SwitchInternalError), want: 6},
+		{name: "switch busy", got: uint8(SwitchBusy), want: 7},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -128,6 +130,20 @@ func TestFrameOwnsPayload(t *testing.T) {
 	}
 }
 
+func TestFramePanicsWhenPayloadExceedsProtocolMaximum(t *testing.T) {
+	defer func() {
+		value := recover()
+		if value == nil {
+			t.Fatal("frame accepted oversized payload")
+		}
+		message, ok := value.(string)
+		if !ok || !strings.Contains(message, "payload length") || !strings.Contains(message, "1024") {
+			t.Fatalf("panic=%v, want clear payload maximum message", value)
+		}
+	}()
+	frame(TypeStatusFull, make([]byte, MaxPayload+1))
+}
+
 func TestMessagePayloadParsersPreserveRawValues(t *testing.T) {
 	status, err := ParseSubscribeRequest([]byte{0xfe})
 	if err != nil || status != StatusType(0xfe) {
@@ -144,6 +160,24 @@ func TestMessagePayloadParsersPreserveRawValues(t *testing.T) {
 	ack, err := ParseSwitchACK([]byte{1, 2, 3, 4, 0xfa})
 	if err != nil || ack != (SwitchACK{RequestID: 0x01020304, Result: 0xfa}) {
 		t.Fatalf("switch ack: ack=%+v err=%v", ack, err)
+	}
+}
+
+func TestSwitchEnumsUseStrongTypesAndPreserveUnknownValues(t *testing.T) {
+	request := SwitchRequest{
+		RequestID: 0x01020304,
+		Enabled:   0xfc,
+		Type:      SwitchType(0xfb),
+	}
+	parsedRequest, err := ParseSwitchRequest(EncodeSwitchRequest(request)[HeaderSize:])
+	if err != nil || parsedRequest != request {
+		t.Fatalf("switch request: parsed=%+v want=%+v err=%v", parsedRequest, request, err)
+	}
+
+	ack := SwitchACK{RequestID: 0x05060708, Result: SwitchResult(0xfa)}
+	parsedACK, err := ParseSwitchACK(EncodeSwitchACK(ack)[HeaderSize:])
+	if err != nil || parsedACK != ack {
+		t.Fatalf("switch ACK: parsed=%+v want=%+v err=%v", parsedACK, ack, err)
 	}
 }
 
@@ -254,6 +288,38 @@ func TestStatusValidZeroFieldsKeepTheirBits(t *testing.T) {
 	}
 }
 
+func TestFullFixDimensionSanitization(t *testing.T) {
+	tests := []struct {
+		name     string
+		mask     uint64
+		value    uint8
+		wantMask uint64
+		wantByte uint8
+	}{
+		{name: "bit off", mask: 0, value: 3, wantMask: 0, wantByte: 0},
+		{name: "zero invalid", mask: model.FullFixDimensionValid, value: 0, wantMask: 0, wantByte: 0},
+		{name: "one valid", mask: model.FullFixDimensionValid, value: 1, wantMask: model.FullFixDimensionValid, wantByte: 1},
+		{name: "two valid", mask: model.FullFixDimensionValid, value: 2, wantMask: model.FullFixDimensionValid, wantByte: 2},
+		{name: "three valid", mask: model.FullFixDimensionValid, value: 3, wantMask: model.FullFixDimensionValid, wantByte: 3},
+		{name: "four invalid", mask: model.FullFixDimensionValid, value: 4, wantMask: 0, wantByte: 0},
+		{name: "maximum invalid", mask: model.FullFixDimensionValid, value: 255, wantMask: 0, wantByte: 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			payload := EncodeFull(model.FullStatus{
+				FieldValidityMask: tt.mask,
+				FixDimension:      tt.value,
+			})[HeaderSize:]
+			if got := binary.BigEndian.Uint64(payload[0:8]); got != tt.wantMask {
+				t.Fatalf("mask=%#x want=%#x", got, tt.wantMask)
+			}
+			if got := payload[57]; got != tt.wantByte {
+				t.Fatalf("fix dimension=%d want=%d", got, tt.wantByte)
+			}
+		})
+	}
+}
+
 func TestStatusBitsOffForceNonzeroValuesToZero(t *testing.T) {
 	simpleStatus := model.SimpleStatus{
 		UTCTime:             1,
@@ -287,6 +353,43 @@ func TestStatusReservedMaskBitsAreCleared(t *testing.T) {
 	full.FieldValidityMask = ^uint64(0)
 	if got := binary.BigEndian.Uint64(EncodeFull(full)[8:16]); got != allFullBits {
 		t.Fatalf("full mask=%#x want=%#x", got, allFullBits)
+	}
+}
+
+func TestEncodeSimpleDoesNotMutateSource(t *testing.T) {
+	status := model.SimpleStatus{
+		FieldValidityMask:   ^uint64(0),
+		UTCTime:             1,
+		RecvTime:            2,
+		Latitude:            91,
+		Longitude:           -181,
+		AltitudeMSL:         -3,
+		GroundSpeedMPS:      -4,
+		CourseOverGroundDeg: 360,
+		Valid:               2,
+		UsedSatellites:      5,
+	}
+	want := status
+	EncodeSimple(status)
+	if status != want {
+		t.Fatalf("source mutated: got=%+v want=%+v", status, want)
+	}
+}
+
+func TestEncodeFullDoesNotMutateSource(t *testing.T) {
+	status := validFullStatus()
+	status.FieldValidityMask = ^uint64(0)
+	status.Latitude = 91
+	status.Longitude = -181
+	status.Valid = 2
+	status.FixDimension = 255
+	status.GGAHDOP = -1
+	status.CourseOverGroundDeg = 360
+	status.GSTOrientationDeg = 360
+	want := status
+	EncodeFull(status)
+	if status != want {
+		t.Fatalf("source mutated: got=%+v want=%+v", status, want)
 	}
 }
 
@@ -439,7 +542,7 @@ func TestDecoderHandlesGarbagePartialHeaderAndStickyFrames(t *testing.T) {
 	if frames[0].Type != TypeSubscribeRequest || !bytes.Equal(frames[0].Payload, []byte{byte(StatusSimple)}) {
 		t.Fatalf("first=%+v", frames[0])
 	}
-	if frames[1].Type != TypeSwitchRequest || !bytes.Equal(frames[1].Payload, []byte{0, 0, 0, 7, 0, TypeGPS}) {
+	if frames[1].Type != TypeSwitchRequest || !bytes.Equal(frames[1].Payload, []byte{0, 0, 0, 7, 0, byte(TypeGPS)}) {
 		t.Fatalf("second=%+v", frames[1])
 	}
 }
@@ -466,6 +569,27 @@ func TestDecoderResynchronizesAfterOversizedLength(t *testing.T) {
 	frames := d.Feed(append(bad, EncodeSubscribeRequest(StatusFull)...))
 	if len(frames) != 1 || frames[0].Type != TypeSubscribeRequest || !bytes.Equal(frames[0].Payload, []byte{2}) {
 		t.Fatalf("failed to resynchronize: %+v", frames)
+	}
+}
+
+func TestDecoderFindsMagicInsideOversizedCandidateHeader(t *testing.T) {
+	d := NewDecoder(MaxPayload)
+	valid := EncodeSubscribeRequest(StatusFull)
+	input := append([]byte{'G', 'N', 'S', 'S', Version, 0x99}, valid...)
+	frames := d.Feed(input)
+	if len(frames) != 1 || frames[0].Type != TypeSubscribeRequest || !bytes.Equal(frames[0].Payload, []byte{byte(StatusFull)}) {
+		t.Fatalf("frames=%+v", frames)
+	}
+}
+
+func TestDecoderDiscardsWholeKnownWrongLengthFrameContainingMagic(t *testing.T) {
+	d := NewDecoder(MaxPayload)
+	embedded := EncodeSubscribeRequest(StatusFull)
+	bad := rawFrame(Version, TypeSubscribeRequest, append([]byte{0xff}, embedded...))
+	following := EncodeSubscribeRequest(StatusSimple)
+	frames := d.Feed(append(bad, following...))
+	if len(frames) != 1 || frames[0].Type != TypeSubscribeRequest || !bytes.Equal(frames[0].Payload, []byte{byte(StatusSimple)}) {
+		t.Fatalf("frames=%+v", frames)
 	}
 }
 
@@ -553,6 +677,36 @@ func TestDecoderGarbageAndPartialFramesStayBounded(t *testing.T) {
 			t.Fatalf("oversized buffer=%d after iteration %d", len(d.buf), i)
 		}
 	}
+}
+
+func TestDecoderLargeGarbageDoesNotAllocateInputSizedBuffer(t *testing.T) {
+	input := bytes.Repeat([]byte{'x'}, 8<<20)
+	d := NewDecoder(MaxPayload)
+	runtime.GC()
+	var before runtime.MemStats
+	runtime.ReadMemStats(&before)
+	frames := d.Feed(input)
+	var after runtime.MemStats
+	runtime.ReadMemStats(&after)
+	runtime.KeepAlive(input)
+
+	if len(frames) != 0 {
+		t.Fatalf("garbage emitted frames: %+v", frames)
+	}
+	if allocated := after.TotalAlloc - before.TotalAlloc; allocated > 1<<20 {
+		t.Fatalf("Feed allocated %d bytes for large garbage input", allocated)
+	}
+	assertDecoderBufferBound(t, d)
+}
+
+func TestDecoderLargeAdversarialMagicPrefixesStayBounded(t *testing.T) {
+	pattern := []byte{'G', 'N', 'S', 'S', Version, 0x99, 0x04, 0x01, 'G', 'N', 'S', 'X'}
+	input := bytes.Repeat(pattern, 200_000)
+	d := NewDecoder(MaxPayload)
+	if frames := d.Feed(input); len(frames) != 0 {
+		t.Fatalf("adversarial garbage emitted frames: %+v", frames)
+	}
+	assertDecoderBufferBound(t, d)
 }
 
 func TestDecoderMaximumConfigurationDefaultsAndCaps(t *testing.T) {
@@ -691,6 +845,14 @@ func assertLayoutEnd(t *testing.T, widths []int, want int) {
 	}
 	if cursor != want {
 		t.Fatalf("layout end=%d want=%d", cursor, want)
+	}
+}
+
+func assertDecoderBufferBound(t *testing.T, decoder *Decoder) {
+	t.Helper()
+	limit := HeaderSize + decoder.maxPayload
+	if len(decoder.buf) > limit || cap(decoder.buf) > limit {
+		t.Fatalf("decoder buffer len=%d cap=%d limit=%d", len(decoder.buf), cap(decoder.buf), limit)
 	}
 }
 

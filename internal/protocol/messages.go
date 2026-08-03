@@ -23,32 +23,36 @@ const (
 	SubscribeInvalidStatusType  SubscribeResult = 5
 )
 
-const (
-	TypeGPS       uint8 = 1
-	TypeBeiDou    uint8 = 2
-	TypeGPSBeiDou uint8 = 3
-)
+type SwitchType uint8
 
 const (
-	SwitchSuccess           uint8 = 0
-	SwitchInvalidArgument   uint8 = 1
-	SwitchForbidden         uint8 = 2
-	SwitchSerialUnavailable uint8 = 3
-	SwitchTimeout           uint8 = 4
-	SwitchVerifyFailed      uint8 = 5
-	SwitchInternalError     uint8 = 6
-	SwitchBusy              uint8 = 7
+	TypeGPS       SwitchType = 1
+	TypeBeiDou    SwitchType = 2
+	TypeGPSBeiDou SwitchType = 3
+)
+
+type SwitchResult uint8
+
+const (
+	SwitchSuccess           SwitchResult = 0
+	SwitchInvalidArgument   SwitchResult = 1
+	SwitchForbidden         SwitchResult = 2
+	SwitchSerialUnavailable SwitchResult = 3
+	SwitchTimeout           SwitchResult = 4
+	SwitchVerifyFailed      SwitchResult = 5
+	SwitchInternalError     SwitchResult = 6
+	SwitchBusy              SwitchResult = 7
 )
 
 type SwitchRequest struct {
 	RequestID uint32
 	Enabled   uint8
-	Type      uint8
+	Type      SwitchType
 }
 
 type SwitchACK struct {
 	RequestID uint32
-	Result    uint8
+	Result    SwitchResult
 }
 
 func EncodeSubscribeRequest(statusType StatusType) []byte {
@@ -63,14 +67,14 @@ func EncodeSwitchRequest(request SwitchRequest) []byte {
 	payload := make([]byte, 6)
 	binary.BigEndian.PutUint32(payload[0:4], request.RequestID)
 	payload[4] = request.Enabled
-	payload[5] = request.Type
+	payload[5] = byte(request.Type)
 	return frame(TypeSwitchRequest, payload)
 }
 
 func EncodeSwitchACK(ack SwitchACK) []byte {
 	payload := make([]byte, 5)
 	binary.BigEndian.PutUint32(payload[0:4], ack.RequestID)
-	payload[4] = ack.Result
+	payload[4] = byte(ack.Result)
 	return frame(TypeSwitchACK, payload)
 }
 
@@ -95,7 +99,7 @@ func ParseSwitchRequest(payload []byte) (SwitchRequest, error) {
 	return SwitchRequest{
 		RequestID: binary.BigEndian.Uint32(payload[0:4]),
 		Enabled:   payload[4],
-		Type:      payload[5],
+		Type:      SwitchType(payload[5]),
 	}, nil
 }
 
@@ -105,6 +109,6 @@ func ParseSwitchACK(payload []byte) (SwitchACK, error) {
 	}
 	return SwitchACK{
 		RequestID: binary.BigEndian.Uint32(payload[0:4]),
-		Result:    payload[4],
+		Result:    SwitchResult(payload[4]),
 	}, nil
 }

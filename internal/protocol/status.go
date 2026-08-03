@@ -51,7 +51,7 @@ func EncodeFull(status model.FullStatus) []byte {
 	sanitizeFloat64(&mask, model.FullAltitudeMSLValid, &status.AltitudeMSL, finite64)
 	sanitizeFloat64(&mask, model.FullAltitudeEllipsoidValid, &status.AltitudeEllipsoid, finite64)
 	sanitizeValid(&mask, model.FullValidValid, &status.Valid)
-	zeroUint8IfOff(mask, model.FullFixDimensionValid, &status.FixDimension)
+	sanitizeFixDimension(&mask, model.FullFixDimensionValid, &status.FixDimension)
 	zeroUint8IfOff(mask, model.FullSolutionTypeValid, &status.SolutionType)
 	zeroUint8IfOff(mask, model.FullUsedSatellitesValid, &status.UsedSatellites)
 	zeroUint8IfOff(mask, model.FullGPSSatellitesValid, &status.GPSSatellites)
@@ -122,6 +122,13 @@ func zeroUint8IfOff(mask, bit uint64, value *uint8) {
 
 func sanitizeValid(mask *uint64, bit uint64, value *uint8) {
 	if *mask&bit == 0 || *value > 1 {
+		*mask &^= bit
+		*value = 0
+	}
+}
+
+func sanitizeFixDimension(mask *uint64, bit uint64, value *uint8) {
+	if *mask&bit == 0 || *value < 1 || *value > 3 {
 		*mask &^= bit
 		*value = 0
 	}

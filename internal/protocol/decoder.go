@@ -5,6 +5,8 @@ import (
 	"encoding/binary"
 )
 
+var magicBytes = []byte(Magic)
+
 type Frame struct {
 	Version uint8
 	Type    uint8
@@ -20,38 +22,55 @@ func NewDecoder(maxPayload int) *Decoder {
 	if maxPayload <= 0 || maxPayload > MaxPayload {
 		maxPayload = MaxPayload
 	}
-	return &Decoder{maxPayload: maxPayload}
+	return &Decoder{
+		maxPayload: maxPayload,
+		buf:        make([]byte, 0, HeaderSize+maxPayload),
+	}
 }
 
 func (d *Decoder) Feed(input []byte) []Frame {
-	if len(input) != 0 {
-		d.buf = append(d.buf, input...)
-	}
-
 	var frames []Frame
+	for len(input) > 0 {
+		room := cap(d.buf) - len(d.buf)
+		if room == 0 {
+			frames = d.drain(frames)
+			room = cap(d.buf) - len(d.buf)
+			if room == 0 {
+				panic("protocol: decoder full buffer made no progress")
+			}
+		}
+		if room > len(input) {
+			room = len(input)
+		}
+		d.buf = append(d.buf, input[:room]...)
+		input = input[room:]
+		frames = d.drain(frames)
+	}
+	return frames
+}
+
+func (d *Decoder) drain(frames []Frame) []Frame {
 	for {
-		magicIndex := bytes.Index(d.buf, []byte(Magic))
+		magicIndex := bytes.Index(d.buf, magicBytes)
 		if magicIndex < 0 {
 			d.retainMagicTail()
 			return frames
 		}
 		if magicIndex > 0 {
-			d.buf = d.buf[magicIndex:]
+			d.discard(magicIndex)
 		}
 		if len(d.buf) < HeaderSize {
-			d.compact()
 			return frames
 		}
 
 		payloadLength := int(binary.BigEndian.Uint16(d.buf[6:8]))
 		if payloadLength > d.maxPayload {
-			d.buf = d.buf[1:]
+			d.discard(1)
 			continue
 		}
 
 		frameLength := HeaderSize + payloadLength
 		if len(d.buf) < frameLength {
-			d.compact()
 			return frames
 		}
 
@@ -66,7 +85,7 @@ func (d *Decoder) Feed(input []byte) []Frame {
 				Payload: payload,
 			})
 		}
-		d.buf = d.buf[frameLength:]
+		d.discard(frameLength)
 	}
 }
 
@@ -99,21 +118,16 @@ func (d *Decoder) retainMagicTail() {
 	if len(d.buf) < keep {
 		keep = len(d.buf)
 	}
-	if keep == 0 {
-		d.buf = nil
-		return
+	if keep > 0 {
+		copy(d.buf[:keep], d.buf[len(d.buf)-keep:])
 	}
-	tail := make([]byte, keep)
-	copy(tail, d.buf[len(d.buf)-keep:])
-	d.buf = tail
+	d.buf = d.buf[:keep]
 }
 
-func (d *Decoder) compact() {
-	if len(d.buf) == 0 {
-		d.buf = nil
+func (d *Decoder) discard(count int) {
+	if count <= 0 {
 		return
 	}
-	compact := make([]byte, len(d.buf))
-	copy(compact, d.buf)
-	d.buf = compact
+	copy(d.buf, d.buf[count:])
+	d.buf = d.buf[:len(d.buf)-count]
 }

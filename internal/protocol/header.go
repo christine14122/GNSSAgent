@@ -1,6 +1,9 @@
 package protocol
 
-import "encoding/binary"
+import (
+	"encoding/binary"
+	"fmt"
+)
 
 const (
 	Magic            = "GNSS"
@@ -20,6 +23,9 @@ const (
 )
 
 func frame(messageType uint8, payload []byte) []byte {
+	if len(payload) > MaxPayload {
+		panic(fmt.Sprintf("protocol: payload length %d exceeds maximum %d", len(payload), MaxPayload))
+	}
 	out := make([]byte, HeaderSize+len(payload))
 	copy(out[:4], Magic)
 	out[4] = Version
