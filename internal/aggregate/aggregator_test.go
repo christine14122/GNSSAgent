@@ -533,9 +533,114 @@ func TestClearResetsCompletedSecondGuard(t *testing.T) {
 	}
 }
 
-func TestSecondOrderingRejectsHalfDayAmbiguity(t *testing.T) {
-	if secondIsForward(0, 43_200) || secondIsForward(43_200, 0) {
-		t.Fatal("an exact half-day delta has no deterministic forward direction")
+func TestCompletedGuardRejectsDuplicatesAndOlderSecondsInsideLateWindow(t *testing.T) {
+	base := time.Unix(8_450, 0)
+	a := New()
+	a.Add(rmcSentence(base, 10_000, true))
+	completedAt := base.Add(flushDelay)
+	a.FlushExpired(completedAt)
+	for _, sentence := range []nmea.Sentence{
+		rmcSentence(completedAt.Add(100*time.Millisecond), 10_000, true),
+		rmcSentence(completedAt.Add(200*time.Millisecond), 9_000, true),
+		rmcSentence(completedAt.Add(-100*time.Millisecond), 10_000, true),
+	} {
+		if _, ok := a.Add(sentence); ok {
+			t.Fatal("late-window stale sentence published")
+		}
+	}
+	if _, ok := a.FlushExpired(completedAt.Add(10 * time.Second)); ok {
+		t.Fatal("late-window stale sentence created a cycle")
+	}
+}
+
+func TestCompletedGuardExpiresAfterLongOutage(t *testing.T) {
+	tests := []struct {
+		name      string
+		outage    time.Duration
+		millisDay int64
+	}{
+		{name: "exactly twelve hours", outage: 12 * time.Hour, millisDay: 43_210_000},
+		{name: "more than twelve hours", outage: 13 * time.Hour, millisDay: 46_810_000},
+		{name: "same second next day", outage: 24 * time.Hour, millisDay: 10_000},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			base := time.Unix(8_500, 0)
+			a := New()
+			a.Add(rmcSentence(base, 10_000, true))
+			completedAt := base.Add(flushDelay)
+			a.FlushExpired(completedAt)
+			received := completedAt.Add(tt.outage)
+			next := rmcSentence(received, tt.millisDay, true)
+			next.RMC.SpeedKnots = field(1.0)
+			if _, ok := a.Add(next); ok {
+				t.Fatal("first post-outage sentence published")
+			}
+			got, ok := a.FlushExpired(received.Add(flushDelay))
+			if !ok || got.FieldValidityMask&model.FullGroundSpeedValid == 0 {
+				t.Fatalf("post-outage sentence did not establish a cycle: (%+v, %t)", got, ok)
+			}
+		})
+	}
+}
+
+func TestActiveTimedCycleRejectsHalfDayAmbiguity(t *testing.T) {
+	base := time.Unix(8_550, 0)
+	for _, seconds := range [][2]int64{{0, 43_200}, {43_200, 0}} {
+		a := New()
+		a.Add(rmcSentence(base, seconds[0]*1000, true))
+		if _, ok := a.Add(rmcSentence(base.Add(12*time.Hour), seconds[1]*1000, true)); ok {
+			t.Fatalf("active cycle accepted ambiguous %d to %d jump", seconds[0], seconds[1])
+		}
+	}
+}
+
+func TestExpiredGuardLetsLongOutageTimedSentenceAdoptUntimedCycle(t *testing.T) {
+	base := time.Unix(8_600, 0)
+	a := New()
+	a.Add(rmcSentence(base, 10_000, true))
+	completedAt := base.Add(flushDelay)
+	a.FlushExpired(completedAt)
+	untimedReceived := completedAt.Add(100 * time.Millisecond)
+	a.Add(gsaSentence(untimedReceived, "GP", 2, field(uint8(2)), []string{"01"}, "1", "1", "1"))
+
+	received := completedAt.Add(24 * time.Hour)
+	next := rmcSentence(received, 10_000, true)
+	next.RMC.SpeedKnots = field(1.0)
+	if _, ok := a.Add(next); ok {
+		t.Fatal("post-outage sentence should adopt untimed cycle")
+	}
+	got, ok := a.FlushExpired(received.Add(flushDelay))
+	if !ok || got.FixDimension != 2 || got.FieldValidityMask&model.FullGroundSpeedValid == 0 {
+		t.Fatalf("expired guard blocked untimed adoption: (%+v, %t)", got, ok)
+	}
+}
+
+func TestCompletedGuardRecoversFromLargeReceiveClockRollback(t *testing.T) {
+	base := time.Unix(200_000, 0)
+	a := New()
+	a.Add(rmcSentence(base, 10_000, true))
+	a.FlushExpired(base.Add(flushDelay))
+	received := base.Add(-24 * time.Hour)
+	a.Add(rmcSentence(received, 10_000, true))
+	if _, ok := a.FlushExpired(received.Add(flushDelay)); !ok {
+		t.Fatal("large receive-clock rollback caused indefinite guard lockout")
+	}
+}
+
+func TestCompletedGuardUsesPublicationReferenceTimes(t *testing.T) {
+	base := time.Unix(300_000, 0)
+	a := New()
+	a.Add(rmcSentence(base, 10_000, true))
+	transition := rmcSentence(base.Add(500*time.Millisecond), 11_000, true)
+	a.Add(transition)
+	if !a.completedAt.Equal(transition.ReceivedAt) {
+		t.Fatalf("transition completedAt=%v want=%v", a.completedAt, transition.ReceivedAt)
+	}
+	flushAt := base.Add(3 * time.Second)
+	a.FlushExpired(flushAt)
+	if !a.completedAt.Equal(flushAt) {
+		t.Fatalf("flush completedAt=%v want=%v", a.completedAt, flushAt)
 	}
 }
 

@@ -9,10 +9,16 @@ import (
 
 const flushDelay = 1500 * time.Millisecond
 
+// lateArrivalWindow bounds duplicate/stale suppression to two flush periods.
+// Beyond it, receive-time continuity is no longer assumed and a new stream can
+// rebase its seconds-of-day ordering guard.
+const lateArrivalWindow = 2 * flushDelay
+
 type Aggregator struct {
 	current            *cycle
 	completedSecond    int64
 	hasCompletedSecond bool
+	completedAt        time.Time
 }
 
 func New() *Aggregator {
@@ -21,6 +27,9 @@ func New() *Aggregator {
 
 func (a *Aggregator) Add(sentence nmea.Sentence) (model.FullStatus, bool) {
 	second, timed := sentenceSecond(sentence)
+	if timed && (a.current == nil || !a.current.hasSecond) {
+		a.expireCompletedGuard(sentence.ReceivedAt)
+	}
 	if a.current == nil {
 		if timed && a.hasCompletedSecond && !secondIsForward(a.completedSecond, second) {
 			return model.FullStatus{}, false
@@ -38,8 +47,7 @@ func (a *Aggregator) Add(sentence nmea.Sentence) (model.FullStatus, bool) {
 			return model.FullStatus{}, false
 		}
 		completed := a.current.status()
-		a.completedSecond = a.current.second
-		a.hasCompletedSecond = true
+		a.setCompletedGuard(a.current.second, sentence.ReceivedAt)
 		a.current = newCycle(sentence, second, true)
 		return completed, true
 	} else if timed {
@@ -59,8 +67,7 @@ func (a *Aggregator) FlushExpired(now time.Time) (model.FullStatus, bool) {
 	}
 	completed := a.current.status()
 	if a.current.hasSecond {
-		a.completedSecond = a.current.second
-		a.hasCompletedSecond = true
+		a.setCompletedGuard(a.current.second, now)
 	}
 	a.current = nil
 	return completed, true
@@ -70,6 +77,26 @@ func (a *Aggregator) Clear() {
 	a.current = nil
 	a.completedSecond = 0
 	a.hasCompletedSecond = false
+	a.completedAt = time.Time{}
+}
+
+func (a *Aggregator) setCompletedGuard(second int64, completedAt time.Time) {
+	a.completedSecond = second
+	a.hasCompletedSecond = true
+	a.completedAt = completedAt
+}
+
+func (a *Aggregator) expireCompletedGuard(reference time.Time) {
+	if !a.hasCompletedSecond {
+		return
+	}
+	elapsed := reference.Sub(a.completedAt)
+	if elapsed < lateArrivalWindow && elapsed > -lateArrivalWindow {
+		return
+	}
+	a.completedSecond = 0
+	a.hasCompletedSecond = false
+	a.completedAt = time.Time{}
 }
 
 // secondIsForward orders UTC seconds-of-day within the half-day window around
