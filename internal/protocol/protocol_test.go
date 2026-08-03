@@ -26,6 +26,51 @@ func TestProtocolConstants(t *testing.T) {
 	}
 }
 
+func TestProtocolEnumValues(t *testing.T) {
+	tests := []struct {
+		name string
+		got  uint8
+		want uint8
+	}{
+		{name: "message subscribe request", got: TypeSubscribeRequest, want: 0x01},
+		{name: "message subscribe ACK", got: TypeSubscribeACK, want: 0x02},
+		{name: "message status full", got: TypeStatusFull, want: 0x03},
+		{name: "message status simple", got: TypeStatusSimple, want: 0x04},
+		{name: "message switch request", got: TypeSwitchRequest, want: 0x10},
+		{name: "message switch ACK", got: TypeSwitchACK, want: 0x11},
+
+		{name: "status simple", got: uint8(StatusSimple), want: 1},
+		{name: "status full", got: uint8(StatusFull), want: 2},
+
+		{name: "subscribe success", got: uint8(SubscribeSuccess), want: 0},
+		{name: "subscribe server full", got: uint8(SubscribeServerFull), want: 1},
+		{name: "subscribe already subscribed", got: uint8(SubscribeAlreadySubscribed), want: 2},
+		{name: "subscribe unsupported version", got: uint8(SubscribeUnsupportedVersion), want: 3},
+		{name: "subscribe internal error", got: uint8(SubscribeInternalError), want: 4},
+		{name: "subscribe invalid status type", got: uint8(SubscribeInvalidStatusType), want: 5},
+
+		{name: "GNSS GPS", got: TypeGPS, want: 1},
+		{name: "GNSS BeiDou", got: TypeBeiDou, want: 2},
+		{name: "GNSS GPS plus BeiDou", got: TypeGPSBeiDou, want: 3},
+
+		{name: "switch success", got: SwitchSuccess, want: 0},
+		{name: "switch invalid argument", got: SwitchInvalidArgument, want: 1},
+		{name: "switch forbidden", got: SwitchForbidden, want: 2},
+		{name: "switch serial unavailable", got: SwitchSerialUnavailable, want: 3},
+		{name: "switch timeout", got: SwitchTimeout, want: 4},
+		{name: "switch verify failed", got: SwitchVerifyFailed, want: 5},
+		{name: "switch internal error", got: SwitchInternalError, want: 6},
+		{name: "switch busy", got: SwitchBusy, want: 7},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.got != tt.want {
+				t.Fatalf("got=%#02x want=%#02x", tt.got, tt.want)
+			}
+		})
+	}
+}
+
 func TestFixedFrameSizes(t *testing.T) {
 	if got := len(EncodeSimple(model.SimpleStatus{})); got != 66 {
 		t.Fatalf("simple frame=%d want=66", got)
