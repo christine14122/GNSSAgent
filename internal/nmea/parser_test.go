@@ -270,6 +270,7 @@ func TestParseGSVValidatesHeaderAndPacketStructure(t *testing.T) {
 		{name: "truncated group is not signal ID", body: "GPGSV,1,1,01,07"},
 		{name: "extra tail", body: "GPGSV,1,1,01,07,79,048,42,1,99"},
 		{name: "explicit zero satellites", body: "GPGSV,1,1,00", valid: true, wantTotal: 1, wantNumber: 1},
+		{name: "zero satellites with signal", body: "GPGSV,1,1,00,1", valid: true, wantTotal: 1, wantNumber: 1, wantSignal: Field[uint8]{Value: 1, Valid: true}},
 		{name: "four groups without signal", body: "GPGSV,1,1,04,01,10,100,20,02,20,200,30,03,30,300,40,04,40,359,50", valid: true, wantTotal: 1, wantNumber: 1, wantVisible: 4, wantSatellites: 4},
 		{name: "four groups with signal", body: "GPGSV,1,1,04,01,10,100,20,02,20,200,30,03,30,300,40,04,40,359,50,1", valid: true, wantTotal: 1, wantNumber: 1, wantVisible: 4, wantSatellites: 4, wantSignal: Field[uint8]{Value: 1, Valid: true}},
 		{name: "partial final packet", body: "GPGSV,2,2,05,05,50,250,35,1", valid: true, wantTotal: 2, wantNumber: 2, wantVisible: 5, wantSatellites: 1, wantSignal: Field[uint8]{Value: 1, Valid: true}},
@@ -600,13 +601,6 @@ func TestFixFixturesAreSemanticallyConsistent(t *testing.T) {
 			name: "beidou-fix.nmea", ggaTalker: "BD", used: 6,
 			constellations: []constellation{{talker: "BD", systemID: 4, prns: []string{"06", "07", "08", "09", "10", "11"}}},
 		},
-		{
-			name: "combined-fix.nmea", ggaTalker: "GN", used: 14,
-			constellations: []constellation{
-				{talker: "GP", systemID: 1, prns: []string{"01", "03", "05", "07", "09", "11", "13", "15"}},
-				{talker: "BD", systemID: 4, prns: []string{"06", "07", "08", "09", "10", "11"}},
-			},
-		},
 	}
 
 	for _, test := range tests {
@@ -644,10 +638,119 @@ func TestFixFixturesAreSemanticallyConsistent(t *testing.T) {
 	}
 }
 
+func TestCombinedFixtureUsesLegacyGNGSAAndCoherentGSV(t *testing.T) {
+	sentences := parseFixture(t, "combined-fix.nmea")
+	wantGPS := []string{"01", "03", "05", "07", "09", "11", "13", "15"}
+	wantBeiDou := []string{"201", "202", "203", "204", "205", "206"}
+	wantGSA := [][]string{wantGPS, wantBeiDou}
+
+	var gga *GGA
+	var gsas []*GSA
+	for i := range sentences {
+		sentence := &sentences[i]
+		switch sentence.Kind {
+		case KindGGA:
+			if sentence.Talker != "GN" || gga != nil {
+				t.Fatalf("unexpected GGA sentence: talker=%s", sentence.Talker)
+			}
+			gga = sentence.GGA
+		case KindGSA:
+			if sentence.Talker != "GN" {
+				t.Fatalf("combined GSA talker=%s want GN", sentence.Talker)
+			}
+			gsas = append(gsas, sentence.GSA)
+		case KindGSV:
+			if sentence.Talker != "GP" && sentence.Talker != "BD" {
+				t.Fatalf("combined GSV talker=%s want GP or BD", sentence.Talker)
+			}
+		}
+	}
+	if gga == nil || !gga.Quality.Valid || gga.Quality.Value == 0 || !gga.UsedSatellites.Valid || gga.UsedSatellites.Value != 14 {
+		t.Fatalf("combined GGA=%+v", gga)
+	}
+	if len(gsas) != len(wantGSA) {
+		t.Fatalf("GN GSA count=%d want=%d", len(gsas), len(wantGSA))
+	}
+	for i, gsa := range gsas {
+		if gsa.SystemID.Valid || !slices.Equal(gsa.PRNs, wantGSA[i]) {
+			t.Fatalf("GN GSA %d=%+v want PRNs=%v and no System ID", i+1, gsa, wantGSA[i])
+		}
+	}
+	for _, prn := range wantGPS {
+		if slices.Contains(wantBeiDou, prn) {
+			t.Fatalf("raw PRN %s cannot uniquely match a GSV constellation", prn)
+		}
+	}
+	assertFixtureGSV(t, sentences, "GP", wantGPS)
+	assertFixtureGSV(t, sentences, "BD", wantBeiDou)
+}
+
+func TestFixFixturesContainDateBearingRMCAndGST(t *testing.T) {
+	tests := []struct {
+		name            string
+		primaryTalker   string
+		syntheticTalker string
+	}{
+		{name: "gps-fix.nmea", primaryTalker: "GP", syntheticTalker: "GL"},
+		{name: "beidou-fix.nmea", primaryTalker: "BD", syntheticTalker: "GB"},
+		{name: "combined-fix.nmea", primaryTalker: "GN", syntheticTalker: "GA"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			sentences := parseFixture(t, test.name)
+			var rmc *RMC
+			var primaryGST *GST
+			var syntheticGST *GST
+			for i := range sentences {
+				sentence := &sentences[i]
+				switch sentence.Kind {
+				case KindRMC:
+					if sentence.Talker != test.primaryTalker || rmc != nil {
+						t.Fatalf("unexpected RMC: talker=%s", sentence.Talker)
+					}
+					rmc = sentence.RMC
+				case KindGST:
+					switch sentence.Talker {
+					case test.primaryTalker:
+						if primaryGST != nil {
+							t.Fatalf("multiple %s GST sentences", test.primaryTalker)
+						}
+						primaryGST = sentence.GST
+					case test.syntheticTalker:
+						if syntheticGST != nil {
+							t.Fatalf("multiple %s synthetic GST sentences", test.syntheticTalker)
+						}
+						syntheticGST = sentence.GST
+					default:
+						t.Fatalf("unexpected GST talker=%s", sentence.Talker)
+					}
+				}
+			}
+			if rmc == nil || !rmc.TimeValid || !rmc.Date.Valid {
+				t.Fatalf("RMC=%+v", rmc)
+			}
+			assertValidGSTFields(t, test.primaryTalker, primaryGST, false)
+			assertValidGSTFields(t, test.syntheticTalker, syntheticGST, true)
+		})
+	}
+}
+
+func assertValidGSTFields(t *testing.T, talker string, gst *GST, wantSyntheticZero bool) {
+	t.Helper()
+	if gst == nil || !gst.TimeValid {
+		t.Fatalf("%s GST=%+v", talker, gst)
+	}
+	fields := []Field[float64]{gst.PseudorangeRMS, gst.SemiMajorError, gst.SemiMinorError, gst.OrientationDeg, gst.LatitudeError, gst.LongitudeError, gst.AltitudeError}
+	for i, field := range fields {
+		if !field.Valid || (wantSyntheticZero && field.Value != 0) {
+			t.Fatalf("%s GST field %d=%+v synthetic=%t", talker, i+1, field, wantSyntheticZero)
+		}
+	}
+}
+
 func assertFixtureConstellation(t *testing.T, sentences []Sentence, talker string, systemID uint8, wantPRNs []string) {
 	t.Helper()
 	var gsa *GSA
-	packets := make([]*GSV, (len(wantPRNs)+3)/4)
 	for i := range sentences {
 		if sentences[i].Talker != talker {
 			continue
@@ -658,21 +761,30 @@ func assertFixtureConstellation(t *testing.T, sentences []Sentence, talker strin
 				t.Fatalf("multiple %s GSA sentences", talker)
 			}
 			gsa = sentences[i].GSA
-		case KindGSV:
-			gsv := sentences[i].GSV
-			if gsv.TotalMessages != len(packets) || !gsv.VisibleCount.Valid || int(gsv.VisibleCount.Value) != len(wantPRNs) || gsv.MessageNumber < 1 || gsv.MessageNumber > len(packets) {
-				t.Fatalf("inconsistent %s GSV=%+v", talker, gsv)
-			}
-			if packets[gsv.MessageNumber-1] != nil {
-				t.Fatalf("duplicate %s GSV packet %d", talker, gsv.MessageNumber)
-			}
-			packets[gsv.MessageNumber-1] = gsv
 		}
 	}
 	if gsa == nil || !gsa.SystemID.Valid || gsa.SystemID.Value != systemID || !slices.Equal(gsa.PRNs, wantPRNs) {
 		t.Fatalf("%s GSA=%+v want system=%d PRNs=%v", talker, gsa, systemID, wantPRNs)
 	}
+	assertFixtureGSV(t, sentences, talker, wantPRNs)
+}
 
+func assertFixtureGSV(t *testing.T, sentences []Sentence, talker string, wantPRNs []string) {
+	t.Helper()
+	packets := make([]*GSV, (len(wantPRNs)+3)/4)
+	for i := range sentences {
+		if sentences[i].Talker != talker || sentences[i].Kind != KindGSV {
+			continue
+		}
+		gsv := sentences[i].GSV
+		if gsv.TotalMessages != len(packets) || !gsv.VisibleCount.Valid || int(gsv.VisibleCount.Value) != len(wantPRNs) || gsv.MessageNumber < 1 || gsv.MessageNumber > len(packets) {
+			t.Fatalf("inconsistent %s GSV=%+v", talker, gsv)
+		}
+		if packets[gsv.MessageNumber-1] != nil {
+			t.Fatalf("duplicate %s GSV packet %d", talker, gsv.MessageNumber)
+		}
+		packets[gsv.MessageNumber-1] = gsv
+	}
 	gotPRNs := make([]string, 0, len(wantPRNs))
 	for packetNumber, packet := range packets {
 		if packet == nil {
