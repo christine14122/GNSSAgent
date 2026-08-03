@@ -2,6 +2,7 @@ package aggregate
 
 import (
 	"math"
+	"sort"
 
 	"gnssagent/internal/nmea"
 )
@@ -38,11 +39,20 @@ type completeGSV struct {
 	satellites map[string]gsvSatellite
 }
 
-type gsvAssembly struct {
+type gsvStreamKey struct {
+	talker   string
+	signalID nmea.Field[uint8]
+}
+
+type gsvGeneration struct {
 	total   int
 	visible uint8
 	packets map[int]*nmea.GSV
-	invalid bool
+}
+
+type gsvStream struct {
+	generations []*gsvGeneration
+	conflict    bool
 }
 
 func constellationForSystemID(systemID uint8) string {
@@ -76,7 +86,7 @@ func constellationForTalker(talker string) string {
 }
 
 func collectCompleteGSVs(sentences []nmea.Sentence) map[string]completeGSV {
-	assemblies := make(map[string]*gsvAssembly)
+	streams := make(map[gsvStreamKey]*gsvStream)
 	for _, sentence := range sentences {
 		if sentence.Kind != nmea.KindGSV || sentence.GSV == nil {
 			continue
@@ -85,92 +95,175 @@ func collectCompleteGSVs(sentences []nmea.Sentence) map[string]completeGSV {
 			continue
 		}
 		gsv := sentence.GSV
-		assembly := assemblies[sentence.Talker]
-		if assembly == nil {
-			assembly = &gsvAssembly{total: gsv.TotalMessages, packets: make(map[int]*nmea.GSV)}
-			if gsv.VisibleCount.Valid {
-				assembly.visible = gsv.VisibleCount.Value
-			}
-			assemblies[sentence.Talker] = assembly
-		}
-		if !validGSVHeader(gsv) || gsv.TotalMessages != assembly.total || gsv.VisibleCount.Value != assembly.visible {
-			assembly.invalid = true
+		if !validGSVHeader(gsv) {
 			continue
 		}
-		if _, duplicate := assembly.packets[gsv.MessageNumber]; duplicate {
-			assembly.invalid = true
-			continue
+		key := gsvStreamKey{talker: sentence.Talker, signalID: gsv.SignalID}
+		stream := streams[key]
+		if stream == nil {
+			stream = &gsvStream{}
+			streams[key] = stream
 		}
-		assembly.packets[gsv.MessageNumber] = gsv
+		stream.add(gsv)
 	}
 
 	complete := make(map[string]completeGSV)
 	conflicted := make(map[string]bool)
-	for _, talker := range []string{"GP", "BD", "GB", "GL", "GA"} {
-		assembly := assemblies[talker]
-		if assembly == nil {
+	keys := make([]gsvStreamKey, 0, len(streams))
+	for key := range streams {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(left, right int) bool {
+		if keys[left].talker != keys[right].talker {
+			return keys[left].talker < keys[right].talker
+		}
+		if keys[left].signalID.Valid != keys[right].signalID.Valid {
+			return !keys[left].signalID.Valid
+		}
+		return keys[left].signalID.Value < keys[right].signalID.Value
+	})
+	for _, key := range keys {
+		constellation := constellationForTalker(key.talker)
+		set, valid, streamConflict := streams[key].completeSet()
+		if streamConflict {
+			delete(complete, constellation)
+			conflicted[constellation] = true
 			continue
 		}
-		if assembly.invalid || assembly.total <= 0 || len(assembly.packets) != assembly.total {
+		if !valid || conflicted[constellation] {
 			continue
 		}
-		expectedTotal := (int(assembly.visible) + 3) / 4
-		if expectedTotal == 0 {
-			expectedTotal = 1
-		}
-		if expectedTotal != assembly.total {
-			continue
-		}
-		set := completeGSV{visible: assembly.visible, satellites: make(map[string]gsvSatellite)}
-		valid := true
-		for number := 1; number <= assembly.total; number++ {
-			packet := assembly.packets[number]
-			if packet == nil || len(packet.Satellites) != expectedPacketSatellites(assembly.visible, number) {
-				valid = false
-				break
-			}
-			for _, satellite := range packet.Satellites {
-				if satellite.PRN == "" {
-					valid = false
-					break
-				}
-				if _, duplicate := set.satellites[satellite.PRN]; duplicate {
-					valid = false
-					break
-				}
-				cn0 := satellite.CN0
-				if cn0.Valid && (math.IsNaN(float64(cn0.Value)) || math.IsInf(float64(cn0.Value), 0) || cn0.Value < 0) {
-					cn0 = nmea.Field[float32]{}
-				}
-				set.satellites[satellite.PRN] = gsvSatellite{cn0: cn0}
-			}
-			if !valid {
-				break
-			}
-		}
-		if valid && len(set.satellites) == int(set.visible) {
-			constellation := constellationForTalker(talker)
-			if conflicted[constellation] {
-				continue
-			}
-			if existing, exists := complete[constellation]; exists && !sameCompleteGSV(existing, set) {
+		if existing, exists := complete[constellation]; exists {
+			merged, sameMembership := mergeCompleteGSV(existing, set)
+			if !sameMembership {
 				delete(complete, constellation)
 				conflicted[constellation] = true
 				continue
 			}
-			complete[constellation] = set
+			complete[constellation] = merged
+			continue
 		}
+		complete[constellation] = set
 	}
 	return complete
 }
 
-func sameCompleteGSV(left, right completeGSV) bool {
-	if left.visible != right.visible || len(left.satellites) != len(right.satellites) {
-		return false
+func (stream *gsvStream) add(packet *nmea.GSV) {
+	var candidates []*gsvGeneration
+	for _, generation := range stream.generations {
+		if generation.total != packet.TotalMessages || generation.visible != packet.VisibleCount.Value || generation.complete() {
+			continue
+		}
+		if existing, occupied := generation.packets[packet.MessageNumber]; occupied {
+			if equalGSVPacket(existing, packet) {
+				return
+			}
+			continue
+		}
+		candidates = append(candidates, generation)
 	}
+	if len(candidates) > 1 {
+		stream.conflict = true
+		return
+	}
+	if len(candidates) == 1 {
+		candidates[0].packets[packet.MessageNumber] = packet
+		return
+	}
+	stream.generations = append(stream.generations, &gsvGeneration{
+		total: packet.TotalMessages, visible: packet.VisibleCount.Value,
+		packets: map[int]*nmea.GSV{packet.MessageNumber: packet},
+	})
+}
+
+func (generation *gsvGeneration) complete() bool {
+	return generation.total > 0 && len(generation.packets) == generation.total
+}
+
+func (stream *gsvStream) completeSet() (completeGSV, bool, bool) {
+	if stream.conflict {
+		return completeGSV{}, false, true
+	}
+	var combined completeGSV
+	haveComplete := false
+	for _, generation := range stream.generations {
+		if !generation.complete() {
+			continue
+		}
+		set, valid := generation.completeSet()
+		if !valid {
+			return completeGSV{}, false, true
+		}
+		if !haveComplete {
+			combined = set
+			haveComplete = true
+			continue
+		}
+		var sameMembership bool
+		combined, sameMembership = mergeCompleteGSV(combined, set)
+		if !sameMembership {
+			return completeGSV{}, false, true
+		}
+	}
+	return combined, haveComplete, false
+}
+
+func (generation *gsvGeneration) completeSet() (completeGSV, bool) {
+	expectedTotal := (int(generation.visible) + 3) / 4
+	if expectedTotal == 0 {
+		expectedTotal = 1
+	}
+	if expectedTotal != generation.total {
+		return completeGSV{}, false
+	}
+	set := completeGSV{visible: generation.visible, satellites: make(map[string]gsvSatellite)}
+	for number := 1; number <= generation.total; number++ {
+		packet := generation.packets[number]
+		if packet == nil || len(packet.Satellites) != expectedPacketSatellites(generation.visible, number) {
+			return completeGSV{}, false
+		}
+		for _, satellite := range packet.Satellites {
+			if satellite.PRN == "" {
+				return completeGSV{}, false
+			}
+			if _, duplicate := set.satellites[satellite.PRN]; duplicate {
+				return completeGSV{}, false
+			}
+			cn0 := satellite.CN0
+			if cn0.Valid && (math.IsNaN(float64(cn0.Value)) || math.IsInf(float64(cn0.Value), 0) || cn0.Value < 0) {
+				cn0 = nmea.Field[float32]{}
+			}
+			set.satellites[satellite.PRN] = gsvSatellite{cn0: cn0}
+		}
+	}
+	return set, len(set.satellites) == int(set.visible)
+}
+
+func mergeCompleteGSV(left, right completeGSV) (completeGSV, bool) {
+	if left.visible != right.visible || len(left.satellites) != len(right.satellites) {
+		return completeGSV{}, false
+	}
+	merged := completeGSV{visible: left.visible, satellites: make(map[string]gsvSatellite, len(left.satellites))}
 	for prn, satellite := range left.satellites {
 		other, exists := right.satellites[prn]
-		if !exists || satellite.cn0 != other.cn0 {
+		if !exists {
+			return completeGSV{}, false
+		}
+		if satellite.cn0 != other.cn0 {
+			satellite.cn0 = nmea.Field[float32]{}
+		}
+		merged.satellites[prn] = satellite
+	}
+	return merged, true
+}
+
+func equalGSVPacket(left, right *nmea.GSV) bool {
+	if left.TotalMessages != right.TotalMessages || left.MessageNumber != right.MessageNumber ||
+		left.VisibleCount != right.VisibleCount || left.SignalID != right.SignalID || len(left.Satellites) != len(right.Satellites) {
+		return false
+	}
+	for index := range left.Satellites {
+		if left.Satellites[index] != right.Satellites[index] {
 			return false
 		}
 	}

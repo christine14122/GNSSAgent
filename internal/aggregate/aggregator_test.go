@@ -430,6 +430,186 @@ func TestReviewTimedGGAAndGSTDriveCycleTransitions(t *testing.T) {
 	}
 }
 
+func TestStaleTimedSentencesNeverReopenCompletedCycles(t *testing.T) {
+	base := time.Unix(8_000, 0)
+	a := New()
+	a.Add(rmcSentence(base, 10_000, true))
+	if _, ok := a.FlushExpired(base.Add(flushDelay)); !ok {
+		t.Fatal("initial timed cycle did not flush")
+	}
+	if _, ok := a.Add(rmcSentence(base.Add(2*time.Second), 10_000, true)); ok {
+		t.Fatal("late same-second sentence published")
+	}
+	if _, ok := a.Add(rmcSentence(base.Add(3*time.Second), 9_000, true)); ok {
+		t.Fatal("backward sentence published")
+	}
+	if _, ok := a.FlushExpired(base.Add(10 * time.Second)); ok {
+		t.Fatal("stale sentence reopened a completed cycle")
+	}
+
+	forwardReceived := base.Add(11 * time.Second)
+	if _, ok := a.Add(rmcSentence(forwardReceived, 11_000, true)); ok {
+		t.Fatal("first forward sentence published")
+	}
+	got, ok := a.Add(rmcSentence(base.Add(12*time.Second), 12_000, true))
+	if !ok || got.RecvTime != uint64(forwardReceived.UnixMilli()) {
+		t.Fatalf("forward transition=(%+v, %t)", got, ok)
+	}
+}
+
+func TestStaleTimedSentenceDoesNotFinalizeOrContaminateCurrent(t *testing.T) {
+	base := time.Unix(8_100, 0)
+	a := New()
+	a.Add(rmcSentence(base, 10_000, true))
+	if _, ok := a.Add(rmcSentence(base.Add(time.Second), 11_000, true)); !ok {
+		t.Fatal("10 to 11 did not publish second 10")
+	}
+	stale := nmea.Sentence{Kind: nmea.KindGGA, ReceivedAt: base.Add(2 * time.Second), GGA: &nmea.GGA{
+		MillisOfDay: 10_000, TimeValid: true, Latitude: field(55.0), Longitude: field(66.0),
+	}}
+	if _, ok := a.Add(stale); ok {
+		t.Fatal("stale second finalized the current cycle")
+	}
+	got, ok := a.Add(rmcSentence(base.Add(3*time.Second), 12_000, true))
+	if !ok || got.FieldValidityMask&(model.FullLatitudeValid|model.FullLongitudeValid) != 0 {
+		t.Fatalf("stale sentence contaminated current cycle: (%+v, %t)", got, ok)
+	}
+}
+
+func TestStaleTimedSentenceCannotAdoptUntimedCycle(t *testing.T) {
+	base := time.Unix(8_200, 0)
+	a := New()
+	a.Add(rmcSentence(base, 10_000, true))
+	a.FlushExpired(base.Add(flushDelay))
+
+	untimedReceived := base.Add(2 * time.Second)
+	a.Add(gsaSentence(untimedReceived, "GP", 2, field(uint8(2)), []string{"01"}, "1", "1", "1"))
+	stale := rmcSentence(base.Add(2100*time.Millisecond), 10_000, true)
+	stale.RMC.SpeedKnots = field(9.0)
+	if _, ok := a.Add(stale); ok {
+		t.Fatal("stale sentence published untimed cycle")
+	}
+	forward := rmcSentence(base.Add(2200*time.Millisecond), 11_000, true)
+	forward.RMC.SpeedKnots = field(1.0)
+	if _, ok := a.Add(forward); ok {
+		t.Fatal("forward sentence should adopt untimed cycle")
+	}
+	got, ok := a.FlushExpired(untimedReceived.Add(flushDelay))
+	if !ok || got.FixDimension != 2 || math.Abs(float64(got.GroundSpeedMPS)-0.5144444444444445) > 1e-7 {
+		t.Fatalf("untimed adoption retained stale data: (%+v, %t)", got, ok)
+	}
+}
+
+func TestTimedOrderingHandlesMidnightAndLatePreMidnight(t *testing.T) {
+	base := time.Unix(8_300, 0)
+	a := New()
+	a.Add(rmcSentence(base, 86_399_000, true))
+	if _, ok := a.Add(rmcSentence(base.Add(time.Second), 0, true)); !ok {
+		t.Fatal("midnight rollover was not forward")
+	}
+	if _, ok := a.Add(rmcSentence(base.Add(1100*time.Millisecond), 500, true)); ok {
+		t.Fatal("same midnight second published")
+	}
+	if _, ok := a.Add(rmcSentence(base.Add(1200*time.Millisecond), 86_399_000, true)); ok {
+		t.Fatal("late pre-midnight sentence published")
+	}
+	got, ok := a.Add(rmcSentence(base.Add(2*time.Second), 1_000, true))
+	if !ok || got.RecvTime != uint64(base.Add(time.Second).UnixMilli()) {
+		t.Fatalf("post-midnight cycle=(%+v, %t)", got, ok)
+	}
+}
+
+func TestClearResetsCompletedSecondGuard(t *testing.T) {
+	base := time.Unix(8_400, 0)
+	a := New()
+	a.Add(rmcSentence(base, 10_000, true))
+	a.FlushExpired(base.Add(flushDelay))
+	a.Clear()
+	resetReceived := base.Add(2 * time.Second)
+	a.Add(rmcSentence(resetReceived, 9_000, true))
+	got, ok := a.FlushExpired(resetReceived.Add(flushDelay))
+	if !ok || got.RecvTime != uint64(resetReceived.UnixMilli()) {
+		t.Fatalf("clear did not reset ordering guard: (%+v, %t)", got, ok)
+	}
+}
+
+func TestSecondOrderingRejectsHalfDayAmbiguity(t *testing.T) {
+	if secondIsForward(0, 43_200) || secondIsForward(43_200, 0) {
+		t.Fatal("an exact half-day delta has no deterministic forward direction")
+	}
+}
+
+func TestAggregatorOwnsStoredSentencePayloadsAndSlices(t *testing.T) {
+	base := time.Unix(8_500, 0)
+	a := New()
+	rmc := &nmea.RMC{MillisOfDay: 10_000, TimeValid: true, Status: field(byte('A')), SpeedKnots: field(1.0), CourseDeg: field(2.0)}
+	gga := &nmea.GGA{MillisOfDay: 10_000, TimeValid: true, Quality: field(uint8(1)), Latitude: field(30.0), Longitude: field(120.0), UsedSatellites: field(uint8(1)), AltitudeMSL: field(10.0), GeoidSeparation: field(1.0)}
+	gsa := &nmea.GSA{PRNs: []string{"01"}}
+	gsv := &nmea.GSV{TotalMessages: 1, MessageNumber: 1, VisibleCount: field(uint8(1)), Satellites: []nmea.Satellite{satellite("01", 40)}}
+	a.Add(nmea.Sentence{Kind: nmea.KindRMC, Talker: "GN", ReceivedAt: base, RMC: rmc})
+	a.Add(nmea.Sentence{Kind: nmea.KindGGA, Talker: "GN", ReceivedAt: base, GGA: gga})
+	a.Add(nmea.Sentence{Kind: nmea.KindGSA, Talker: "GP", ReceivedAt: base, GSA: gsa})
+	a.Add(nmea.Sentence{Kind: nmea.KindGSV, Talker: "GP", ReceivedAt: base, GSV: gsv})
+
+	rmc.Status = field(byte('V'))
+	rmc.SpeedKnots = field(9.0)
+	gga.Quality = field(uint8(0))
+	gga.Latitude = field(55.0)
+	gga.AltitudeMSL = field(99.0)
+	gsa.PRNs[0] = "02"
+	gsv.Satellites[0] = satellite("02", 99)
+
+	got, ok := a.FlushExpired(base.Add(flushDelay))
+	if !ok || got.Valid != 1 || got.Latitude != 30 || got.AltitudeMSL != 10 ||
+		math.Abs(float64(got.GroundSpeedMPS)-0.5144444444444445) > 1e-7 || got.AvgUsedCN0 != 40 {
+		t.Fatalf("caller mutation changed stored state: (%+v, %t)", got, ok)
+	}
+}
+
+func TestRepeatedRecordsUseFirstValidFieldsButCombineValidity(t *testing.T) {
+	base := time.Unix(8_600, 0)
+	date := time.Date(2026, 8, 3, 0, 0, 0, 0, time.UTC)
+	sentences := []nmea.Sentence{
+		{Kind: nmea.KindRMC, ReceivedAt: base, RMC: &nmea.RMC{MillisOfDay: 10_000, TimeValid: true, Date: field(date), Status: field(byte('A')), SpeedKnots: field(1.0), CourseDeg: field(10.0)}},
+		{Kind: nmea.KindRMC, ReceivedAt: base, RMC: &nmea.RMC{MillisOfDay: 10_500, TimeValid: true, Date: field(date.AddDate(0, 0, 1)), Status: field(byte('V')), SpeedKnots: field(2.0), CourseDeg: field(20.0)}},
+		{Kind: nmea.KindGGA, ReceivedAt: base, GGA: &nmea.GGA{MillisOfDay: 10_100, TimeValid: true, Quality: field(uint8(1)), Latitude: field(30.0), Longitude: field(120.0), UsedSatellites: field(uint8(3)), HDOPText: "1.0", AltitudeMSL: field(100.0), GeoidSeparation: field(5.0), DifferentialAge: field(2.0)}},
+		{Kind: nmea.KindGGA, ReceivedAt: base, GGA: &nmea.GGA{MillisOfDay: 10_200, TimeValid: true, Quality: field(uint8(2)), Latitude: field(31.0), Longitude: field(121.0), UsedSatellites: field(uint8(4)), HDOPText: "2.0", AltitudeMSL: field(200.0), GeoidSeparation: field(6.0), DifferentialAge: field(3.0)}},
+		{Kind: nmea.KindGST, ReceivedAt: base, GST: &nmea.GST{MillisOfDay: 10_300, TimeValid: true, PseudorangeRMS: field(1.0), SemiMajorError: field(2.0), SemiMinorError: field(3.0), OrientationDeg: field(4.0), LatitudeError: field(5.0), LongitudeError: field(6.0), AltitudeError: field(7.0)}},
+		{Kind: nmea.KindGST, ReceivedAt: base, GST: &nmea.GST{MillisOfDay: 10_400, TimeValid: true, PseudorangeRMS: field(8.0), SemiMajorError: field(9.0), SemiMinorError: field(10.0), OrientationDeg: field(11.0), LatitudeError: field(12.0), LongitudeError: field(13.0), AltitudeError: field(14.0)}},
+	}
+	got := aggregateSentences(t, sentences)
+	wantUTC := uint64(date.Add(10 * time.Second).UnixMilli())
+	if got.UTCTime != wantUTC || got.Valid != 0 || got.FieldValidityMask&model.FullValidValid == 0 || got.Latitude != 30 || got.Longitude != 120 ||
+		got.AltitudeMSL != 100 || got.AltitudeEllipsoid != 105 || got.SolutionType != 1 || got.UsedSatellites != 3 ||
+		got.GGAHDOP != 1 || got.DifferentialAge != 2 || math.Abs(float64(got.GroundSpeedMPS)-0.5144444444444445) > 1e-7 || got.CourseOverGroundDeg != 10 ||
+		got.GSTPseudorangeRMS != 1 || got.GSTSemiMajorError != 2 || got.GSTSemiMinorError != 3 || got.GSTOrientationDeg != 4 || got.GSTLatitudeError != 5 || got.GSTLongitudeError != 6 || got.GSTAltitudeError != 7 {
+		t.Fatalf("repeated record selection changed: %+v", got)
+	}
+}
+
+func TestRepeatedRecordsSkipInvalidFieldsBeforeSelectingFirstValid(t *testing.T) {
+	base := time.Unix(8_700, 0)
+	date := time.Date(2026, 8, 4, 0, 0, 0, 0, time.UTC)
+	got := aggregateSentences(t, []nmea.Sentence{
+		{Kind: nmea.KindRMC, ReceivedAt: base, RMC: &nmea.RMC{MillisOfDay: 20_000, TimeValid: true, CourseDeg: field(10.0)}},
+		{Kind: nmea.KindRMC, ReceivedAt: base, RMC: &nmea.RMC{MillisOfDay: 20_500, TimeValid: true, Date: field(date), Status: field(byte('A')), SpeedKnots: field(1.0), CourseDeg: field(20.0)}},
+		{Kind: nmea.KindGGA, ReceivedAt: base, GGA: &nmea.GGA{MillisOfDay: 20_100, TimeValid: true, Longitude: field(120.0)}},
+		{Kind: nmea.KindGGA, ReceivedAt: base, GGA: &nmea.GGA{MillisOfDay: 20_200, TimeValid: true, Quality: field(uint8(2)), Latitude: field(30.0), Longitude: field(121.0), HDOPText: "0.8", AltitudeMSL: field(100.0), GeoidSeparation: field(0.0)}},
+		{Kind: nmea.KindGST, ReceivedAt: base, GST: &nmea.GST{MillisOfDay: 20_300, TimeValid: true, SemiMajorError: field(2.0)}},
+		{Kind: nmea.KindGST, ReceivedAt: base, GST: &nmea.GST{MillisOfDay: 20_400, TimeValid: true, PseudorangeRMS: field(1.0), SemiMajorError: field(9.0)}},
+	})
+	wantMask := model.FullUTCValid | model.FullGroundSpeedValid | model.FullCourseValid |
+		model.FullLatitudeValid | model.FullLongitudeValid | model.FullSolutionTypeValid |
+		model.FullGGAHDOPValid | model.FullAltitudeMSLValid | model.FullAltitudeEllipsoidValid |
+		model.FullGSTPseudorangeRMSValid | model.FullGSTSemiMajorValid
+	if got.FieldValidityMask&wantMask != wantMask || got.UTCTime != uint64(date.Add(20_500*time.Millisecond).UnixMilli()) ||
+		math.Abs(float64(got.GroundSpeedMPS)-0.5144444444444445) > 1e-7 || got.CourseOverGroundDeg != 10 ||
+		got.Latitude != 30 || got.Longitude != 120 || got.SolutionType != 2 || got.GGAHDOP != 0.8 ||
+		got.AltitudeMSL != 100 || got.AltitudeEllipsoid != 100 || got.GSTPseudorangeRMS != 1 || got.GSTSemiMajorError != 2 {
+		t.Fatalf("invalid earlier fields blocked later valid selection: %+v", got)
+	}
+}
+
 func aggregateSentences(t *testing.T, sentences []nmea.Sentence) model.FullStatus {
 	t.Helper()
 	if len(sentences) == 0 {

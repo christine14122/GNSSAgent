@@ -10,7 +10,9 @@ import (
 const flushDelay = 1500 * time.Millisecond
 
 type Aggregator struct {
-	current *cycle
+	current            *cycle
+	completedSecond    int64
+	hasCompletedSecond bool
 }
 
 func New() *Aggregator {
@@ -20,17 +22,30 @@ func New() *Aggregator {
 func (a *Aggregator) Add(sentence nmea.Sentence) (model.FullStatus, bool) {
 	second, timed := sentenceSecond(sentence)
 	if a.current == nil {
+		if timed && a.hasCompletedSecond && !secondIsForward(a.completedSecond, second) {
+			return model.FullStatus{}, false
+		}
 		a.current = newCycle(sentence, second, timed)
 		return model.FullStatus{}, false
 	}
 
 	if timed && a.current.hasSecond {
-		if second != a.current.second {
-			completed := a.current.status()
-			a.current = newCycle(sentence, second, true)
-			return completed, true
+		if second == a.current.second {
+			a.current.add(sentence)
+			return model.FullStatus{}, false
 		}
+		if !secondIsForward(a.current.second, second) {
+			return model.FullStatus{}, false
+		}
+		completed := a.current.status()
+		a.completedSecond = a.current.second
+		a.hasCompletedSecond = true
+		a.current = newCycle(sentence, second, true)
+		return completed, true
 	} else if timed {
+		if a.hasCompletedSecond && !secondIsForward(a.completedSecond, second) {
+			return model.FullStatus{}, false
+		}
 		a.current.second = second
 		a.current.hasSecond = true
 	}
@@ -43,12 +58,30 @@ func (a *Aggregator) FlushExpired(now time.Time) (model.FullStatus, bool) {
 		return model.FullStatus{}, false
 	}
 	completed := a.current.status()
+	if a.current.hasSecond {
+		a.completedSecond = a.current.second
+		a.hasCompletedSecond = true
+	}
 	a.current = nil
 	return completed, true
 }
 
 func (a *Aggregator) Clear() {
 	a.current = nil
+	a.completedSecond = 0
+	a.hasCompletedSecond = false
+}
+
+// secondIsForward orders UTC seconds-of-day within the half-day window around
+// the previous key. Cycles flush after 1.5 seconds, so a legitimate forward
+// transition cannot span twelve hours; the opposite modular direction is stale.
+func secondIsForward(previous, candidate int64) bool {
+	const (
+		secondsPerDay = int64(24 * 60 * 60)
+		halfDay       = secondsPerDay / 2
+	)
+	difference := (candidate - previous + secondsPerDay) % secondsPerDay
+	return difference > 0 && difference < halfDay
 }
 
 func sentenceSecond(sentence nmea.Sentence) (int64, bool) {

@@ -20,12 +20,39 @@ func newCycle(sentence nmea.Sentence, second int64, timed bool) *cycle {
 		second:          second,
 		hasSecond:       timed,
 		firstReceivedAt: sentence.ReceivedAt,
-		sentences:       []nmea.Sentence{sentence},
+		sentences:       []nmea.Sentence{cloneSentence(sentence)},
 	}
 }
 
 func (c *cycle) add(sentence nmea.Sentence) {
-	c.sentences = append(c.sentences, sentence)
+	c.sentences = append(c.sentences, cloneSentence(sentence))
+}
+
+func cloneSentence(sentence nmea.Sentence) nmea.Sentence {
+	clone := sentence
+	if sentence.RMC != nil {
+		payload := *sentence.RMC
+		clone.RMC = &payload
+	}
+	if sentence.GGA != nil {
+		payload := *sentence.GGA
+		clone.GGA = &payload
+	}
+	if sentence.GSA != nil {
+		payload := *sentence.GSA
+		payload.PRNs = append([]string(nil), sentence.GSA.PRNs...)
+		clone.GSA = &payload
+	}
+	if sentence.GSV != nil {
+		payload := *sentence.GSV
+		payload.Satellites = append([]nmea.Satellite(nil), sentence.GSV.Satellites...)
+		clone.GSV = &payload
+	}
+	if sentence.GST != nil {
+		payload := *sentence.GST
+		clone.GST = &payload
+	}
+	return clone
 }
 
 func (c *cycle) status() model.FullStatus {

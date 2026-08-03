@@ -425,3 +425,148 @@ func TestReviewGSAFallbackOverflowIsInvalid(t *testing.T) {
 		t.Fatalf("256 identities wrapped/truncated: %+v", got)
 	}
 }
+
+func TestGSVSignalIdentityPreventsCrossStreamCompletion(t *testing.T) {
+	base := time.Unix(21_000, 0)
+	packetOne := gsvSentence(base, "GP", 2, 1, 5,
+		satellite("01", 40), satellite("02", 41), satellite("03", 42), satellite("04", 43))
+	packetTwo := gsvSentence(base, "GP", 2, 2, 5, satellite("05", 44))
+	tests := []struct {
+		name     string
+		firstID  nmea.Field[uint8]
+		secondID nmea.Field[uint8]
+	}{
+		{name: "different signal IDs", firstID: field(uint8(1)), secondID: field(uint8(2))},
+		{name: "missing and present signal IDs", secondID: field(uint8(1))},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			first := packetOne
+			first.GSV = cloneGSVForTest(packetOne.GSV)
+			first.GSV.SignalID = tt.firstID
+			second := packetTwo
+			second.GSV = cloneGSVForTest(packetTwo.GSV)
+			second.GSV.SignalID = tt.secondID
+			got := aggregateSentences(t, []nmea.Sentence{
+				{Kind: nmea.KindGSA, Talker: "GP", ReceivedAt: base, GSA: &nmea.GSA{PRNs: []string{"01"}}},
+				first, second,
+			})
+			if got.FieldValidityMask&model.FullGPSSatellitesValid != 0 || got.GPSSatellites != 0 ||
+				got.FieldValidityMask&model.FullAvgUsedCN0Valid != 0 || got.AvgUsedCN0 != 0 {
+				t.Fatalf("different GSV streams false-completed: %+v", got)
+			}
+		})
+	}
+}
+
+func TestGSVIdenticalDuplicatesAndRepeatedSequencesAreIdempotent(t *testing.T) {
+	base := time.Unix(21_100, 0)
+	packetOne := gsvSentence(base, "GP", 2, 1, 5,
+		satellite("01", 40), satellite("02", 41), satellite("03", 42), satellite("04", 43))
+	packetTwo := gsvSentence(base, "GP", 2, 2, 5, satellite("05", 44))
+	for _, sentence := range []*nmea.Sentence{&packetOne, &packetTwo} {
+		sentence.GSV.SignalID = field(uint8(1))
+	}
+	tests := []struct {
+		name    string
+		packets []nmea.Sentence
+	}{
+		{name: "duplicate packet before completion", packets: []nmea.Sentence{packetOne, packetOne, packetTwo}},
+		{name: "repeated complete identical sequence", packets: []nmea.Sentence{packetOne, packetTwo, packetOne, packetTwo}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := aggregateSentences(t, tt.packets)
+			if got.FieldValidityMask&model.FullGPSSatellitesValid == 0 || got.GPSSatellites != 5 {
+				t.Fatalf("identical repetition poisoned complete stream: %+v", got)
+			}
+		})
+	}
+}
+
+func TestGSVConflictingGenerationsInvalidateMembership(t *testing.T) {
+	base := time.Unix(21_200, 0)
+	packets := []nmea.Sentence{
+		gsvSentence(base, "GP", 2, 1, 5, satellite("01", 40), satellite("02", 41), satellite("03", 42), satellite("04", 43)),
+		gsvSentence(base, "GP", 2, 2, 5, satellite("05", 44)),
+		gsvSentence(base, "GP", 2, 1, 5, satellite("11", 40), satellite("12", 41), satellite("13", 42), satellite("14", 43)),
+		gsvSentence(base, "GP", 2, 2, 5, satellite("15", 44)),
+	}
+	for index := range packets {
+		packets[index].GSV.SignalID = field(uint8(1))
+	}
+	got := aggregateSentences(t, packets)
+	if got.FieldValidityMask&model.FullGPSSatellitesValid != 0 || got.GPSSatellites != 0 {
+		t.Fatalf("conflicting generations selected arbitrary membership: %+v", got)
+	}
+}
+
+func TestGSVConflictingGenerationCountsInvalidateStream(t *testing.T) {
+	base := time.Unix(21_250, 0)
+	packets := []nmea.Sentence{
+		gsvSentence(base, "GP", 1, 1, 1, satellite("01", 40)),
+		gsvSentence(base, "GP", 1, 1, 2, satellite("01", 40), satellite("02", 41)),
+	}
+	for index := range packets {
+		packets[index].GSV.SignalID = field(uint8(1))
+	}
+	got := aggregateSentences(t, packets)
+	if got.FieldValidityMask&model.FullGPSSatellitesValid != 0 || got.GPSSatellites != 0 {
+		t.Fatalf("conflicting generation counts selected arbitrary set: %+v", got)
+	}
+}
+
+func TestGSVSameMembershipMergesAndInvalidatesOnlyConflictingCN0(t *testing.T) {
+	base := time.Unix(21_300, 0)
+	packets := []nmea.Sentence{
+		gsvSentence(base, "GP", 2, 1, 5, satellite("01", 40), satellite("02", 41), satellite("03", 42), satellite("04", 43)),
+		gsvSentence(base, "GP", 2, 2, 5, satellite("05", 44)),
+		gsvSentence(base, "GP", 2, 1, 5, satellite("01", 60), satellite("02", 41), satellite("03", 42), satellite("04", 43)),
+		gsvSentence(base, "GP", 2, 2, 5, satellite("05", 44)),
+	}
+	for index := range packets {
+		packets[index].GSV.SignalID = field(uint8(1))
+	}
+	got := aggregateSentences(t, append([]nmea.Sentence{
+		{Kind: nmea.KindGSA, Talker: "GP", ReceivedAt: base, GSA: &nmea.GSA{PRNs: []string{"01", "02"}}},
+	}, packets...))
+	if got.FieldValidityMask&model.FullGPSSatellitesValid == 0 || got.GPSSatellites != 5 ||
+		got.FieldValidityMask&model.FullAvgUsedCN0Valid == 0 || got.AvgUsedCN0 != 41 {
+		t.Fatalf("CN0-only generation conflict invalidated membership or leaked CN0: %+v", got)
+	}
+}
+
+func TestGSVCompleteSignalStreamsMergeMembershipAndConflictingCN0(t *testing.T) {
+	base := time.Unix(21_350, 0)
+	first := gsvSentence(base, "GP", 1, 1, 2, satellite("01", 40), satellite("02", 41))
+	first.GSV.SignalID = field(uint8(1))
+	second := gsvSentence(base, "GP", 1, 1, 2, satellite("01", 60), satellite("02", 41))
+	second.GSV.SignalID = field(uint8(2))
+	got := aggregateSentences(t, []nmea.Sentence{
+		{Kind: nmea.KindGSA, Talker: "GP", ReceivedAt: base, GSA: &nmea.GSA{PRNs: []string{"01", "02"}}},
+		first, second,
+	})
+	if got.FieldValidityMask&model.FullGPSSatellitesValid == 0 || got.GPSSatellites != 2 ||
+		got.FieldValidityMask&model.FullAvgUsedCN0Valid == 0 || got.AvgUsedCN0 != 41 {
+		t.Fatalf("complete signal streams did not merge conservatively: %+v", got)
+	}
+}
+
+func TestBeiDouAliasesKeepCountAndDropOnlyConflictingCN0(t *testing.T) {
+	base := time.Unix(21_400, 0)
+	got := aggregateSentences(t, []nmea.Sentence{
+		{Kind: nmea.KindGSA, Talker: "BD", ReceivedAt: base, GSA: &nmea.GSA{PRNs: []string{"01", "02"}}},
+		gsvSentence(base, "BD", 1, 1, 2, satellite("01", 40), satellite("02", 50)),
+		gsvSentence(base, "GB", 1, 1, 2, satellite("01", 60), satellite("02", 50)),
+	})
+	if got.FieldValidityMask&model.FullBeiDouSatellitesValid == 0 || got.BeiDouSatellites != 2 ||
+		got.FieldValidityMask&model.FullAvgUsedCN0Valid == 0 || got.AvgUsedCN0 != 50 {
+		t.Fatalf("BD/GB CN0 conflict invalidated count or leaked conflicting CN0: %+v", got)
+	}
+}
+
+func cloneGSVForTest(source *nmea.GSV) *nmea.GSV {
+	clone := *source
+	clone.Satellites = append([]nmea.Satellite(nil), source.Satellites...)
+	return &clone
+}
