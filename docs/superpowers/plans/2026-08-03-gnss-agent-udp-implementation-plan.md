@@ -98,6 +98,8 @@ tests/device/smoke.sh
 tests/protocol_doc.test.ps1
 tests/architecture.test.ps1
 tests/regression/udp_baseline_test.go
+tools/gnss_survey.py
+tools/test_gnss_survey.py
 ```
 
 Do not create `internal/serial`, `internal/control`, a UART endpoint, termios helpers, link-occupancy trackers, ICount readers, or a link-budget capture script.
@@ -198,6 +200,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"net/netip"
 )
 
@@ -225,6 +228,7 @@ func Parse(args []string, target string) (Config, error) {
 	fs.IntVar(&cfg.MaxConnections, "max-connections", cfg.MaxConnections, "maximum total TCP connections")
 	fs.IntVar(&cfg.MaxRemoteConnections, "max-remote-connections", cfg.MaxRemoteConnections, "maximum non-loopback TCP connections")
 	fs.StringVar(&cfg.LogLevel, "log-level", cfg.LogLevel, "debug, info, warn, or error")
+	fs.SetOutput(io.Discard)
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err
 	}
@@ -370,6 +374,7 @@ const (
 	RejectNUL
 	RejectMultiple
 	RejectTerminator
+	RejectSource
 )
 ```
 
@@ -490,6 +495,8 @@ Use fake factories/sockets and an injectable clock/sleeper to prove:
 - an RXQ overflow counter increment produces a kernel-drop delta, including uint32 wrap;
 - `/proc` fallback and fully-unobservable states are surfaced distinctly.
 - a socket whose actual `SO_RCVBUF` is below 256 KiB remains usable and surfaces enough `SocketInfo` for the app to emit the required warning.
+
+The non-loopback-source case must call `sink.DatagramRejected(RejectSource)` exactly once and must not reach checksum validation or parsing. This keeps source-policy rejects visible in Task 10's per-reason counters.
 
 Use this sink contract:
 
@@ -890,9 +897,12 @@ TCP_LISTEN=0.0.0.0:29501
 MAX_CONNECTIONS=5
 MAX_REMOTE_CONNECTIONS=4
 LOG_LEVEL=info
+LOG_FILE=/lib/firmware/gnssagent/log/gnssagent.log
 ```
 
-Assert init/smoke scripts contain no `/dev/tty`, `ttyUL`, baud, termios, `TIOC`, `CFGSYS`, `CFGSAVE`, GPIO, link budget, or UART capture command.
+`/var/log` on MMR200 resolves into volatile storage, so the default log file must remain under the persistent `/lib/firmware` filesystem. The test must reject `/var/log`, `/var/volatile`, or an empty `LOG_FILE`; it must also assert that the init script creates the parent directory and appends stdout/stderr to `LOG_FILE`.
+
+Assert init/smoke scripts contain no `/dev/tty`, `ttyUL`, baud, termios, `TIOC`, `CFGSYS`, `CFGSAVE`, GPIO, link budget, or UART capture command. Also assert that deployment does not require `start-stop-daemon`, and that the smoke script contains both `netstat -lun` and `netstat -lnt` fallbacks.
 
 - [ ] **Step 2: Implement the SysV init script**
 
@@ -906,7 +916,23 @@ The start command passes only:
 --log-level "$LOG_LEVEL"
 ```
 
-Use the target's existing `start-stop-daemon` pattern, PID file, stdout/stderr log destination, TERM stop, and restart. UDP bind failure must not terminate the process; recovery is internal to the service.
+The portable, mandatory start path is the shell pattern already used by the target-family CPDC deployment:
+
+```sh
+mkdir -p "$(dirname "$LOG_FILE")"
+set -- "$GNSSAGENT_BIN" \
+    --udp-listen "$UDP_LISTEN" \
+    --tcp-listen "$TCP_LISTEN" \
+    --max-connections "$MAX_CONNECTIONS" \
+    --max-remote-connections "$MAX_REMOTE_CONNECTIONS" \
+    --log-level "$LOG_LEVEL"
+nohup "$@" >>"$LOG_FILE" 2>&1 </dev/null &
+echo "$!" >"$PIDFILE"
+```
+
+Do not call or require `start-stop-daemon` in the v1 script: it is absent on the measured MMR200 image, while the shell pattern above is already used by the target-family CPDC deployment. Treat any future target-specific daemon helper as a separately tested follow-up, not an untested conditional branch in this script.
+
+Implement `start`, `stop`, `restart`, and `status`. Validate an existing PID file as a decimal live PID before declaring the service running. Stop sends TERM and waits up to 5 seconds; if the process remains alive, return failure instead of silently deleting the PID file. UDP bind failure must not terminate the process because recovery is internal to the service.
 
 - [ ] **Step 3: Implement UDP/TCP smoke checks without serial inspection**
 
@@ -919,7 +945,27 @@ Use the target's existing `start-stop-daemon` pattern, PID file, stdout/stderr l
 5. report `SO_RCVBUF`/kernel-drop information from service logs;
 6. skip with a clear prerequisite error if the target has no compatible `nc`/`od` tools.
 
-It must not inspect which process owns a UART, calculate UART bandwidth, read `/proc/tty`, or collect overrun/frame/parity counters. Those are outside GNSSAgent's revised responsibility.
+Listener inspection must be explicit and portable:
+
+```sh
+if command -v ss >/dev/null 2>&1; then
+    udp_listeners=$(ss -lun)
+    tcp_listeners=$(ss -lnt)
+elif command -v netstat >/dev/null 2>&1; then
+    udp_listeners=$(netstat -lun)
+    tcp_listeners=$(netstat -lnt)
+else
+    echo "neither ss nor netstat is available" >&2
+    exit 1
+fi
+
+printf '%s\n' "$udp_listeners" | grep -F "${UDP_LISTEN%:*}:${UDP_LISTEN##*:}"
+printf '%s\n' "$tcp_listeners" | grep -E ":${TCP_LISTEN##*:}([[:space:]]|$)"
+```
+
+MMR200 currently follows the `netstat` branch (`ss` is absent); `-lun` is mandatory for UDP and `-lnt` for TCP. The smoke script must also read `SO_RCVBUF`/drop evidence from `LOG_FILE` and fail clearly when the persistent log is missing.
+
+It must not inspect which process owns a UART, calculate UART bandwidth, read `/proc/tty`, or collect overrun/frame/parity counters. Those are outside Task 12 and outside the deployed GNSSAgent service.
 
 - [ ] **Step 4: Verify scripts and commit**
 
@@ -938,6 +984,8 @@ git commit -m "deploy: add UDP GNSSAgent SysV service"
 - Create: `tests/protocol_doc.test.ps1`
 - Create: `tests/architecture.test.ps1`
 - Create: `tests/regression/udp_baseline_test.go`
+- Create: `tools/gnss_survey.py`
+- Create: `tools/test_gnss_survey.py`
 
 - [ ] **Step 1: Add external frozen-baseline regression tests**
 
@@ -1000,16 +1048,60 @@ It must deliberately ignore the document's `0x10`/`0x11` payload definitions. Th
 - `SerialDevice`, a baud flag, `/dev/tty`, termios, `TIOCEXCL`, `TIOCGICOUNT`, `CFGSYS`, `CFGSAVE`, GPIO control, or system-clock mutation;
 - a server call to `ParseSwitchRequest`, `EncodeSwitchACK`, or a control handler;
 - UDP binding other than a validated IPv4 loopback address;
-- a UART/link-budget device script.
+- a UART/link-budget command in the deployed init/default/smoke/build paths.
 
-Exclude approved historical/spec/protocol documents and the frozen `internal/protocol` package from string checks for `0x10` definitions; otherwise the guard would reject the preserved baseline intentionally.
+Exclude approved historical/spec/protocol documents and the frozen `internal/protocol` package from string checks for `0x10` definitions; otherwise the guard would reject the preserved baseline intentionally. `tools/gnss_survey.py` is an explicit host-side Task 13 acceptance exception: assert that no production package, init script, smoke script, or build script imports or invokes it.
 
-- [ ] **Step 5: Run the full verification matrix**
+- [ ] **Step 5: Add a repository-owned UART-to-UDP tee verifier**
+
+`tools/gnss_survey.py` is a host-side acceptance tool, not target runtime code and not part of Task 12. Implement a `--tee-verify` mode that owns the evidence required by requirements §15.5-2 and §15.5-11 instead of delegating the completion gate to another team.
+
+For one explicitly selected target, the mode must coordinate a single timestamped capture window after all collectors report ready:
+
+1. discover the UART owner's PID and the file descriptor that resolves to the configured GNSS UART;
+2. use `strace -f -ttt -s 4096` to capture that descriptor's successful `read()` returns without opening the UART itself;
+3. use `tcpdump -i lo -s 0 -U` to capture complete UDP datagrams for destination port 29501;
+4. use a separate timestamped `strace` capture of GNSSAgent's `recvfrom`/`recvmsg` returns so `forward_delay` ends at the application read-return time, not merely at the tcpdump packet timestamp;
+5. take UART kernel RX counter snapshots around the same ready-bounded interval as independent capture evidence;
+6. retrieve raw artifacts to a new host output directory and remove only the tool's explicitly named remote temporary files.
+
+The tee mode must never open/configure the UART, use a direct-read fallback, write a GNSS command, or calculate UART link occupancy. It may reuse read-only SSH and strace parsing logic, but the UART owner remains the only reader.
+
+The analyzer must discard only an incomplete sentence at each capture boundary, reconstruct the remaining UART NMEA in byte order, and compare it to UDP payloads one-for-one. Its machine-readable summary and human report must contain UART complete-sentence count, UDP datagram count, loss/duplicate/reorder counts, and the first differing index and payloads.
+
+Capture completeness must be proven without naively equating raw UART RX delta to application `read()` bytes: RX counters advance when the driver receives bytes, while `read()` can consume bytes queued before/after the snapshot boundary. Instead require every successful traced `read()` record to be present, fully decoded to exactly its syscall return length, and free of unresolved unfinished/resumed calls or strace truncation; require clean attach/detach status; and require tcpdump's final kernel-drop count to be zero. Archive the UART RX snapshots as independent sanity evidence. If a target exposes queue depth at both endpoints without opening the UART, the tool may additionally check `read_bytes = rx_delta + queued_before - queued_after`. Any failed completeness check marks the run `capture_invalid`; it must never be reported as UDP loss or as a passing run.
+
+For `forward_delay`, match each UART sentence-completion occurrence to the corresponding GNSSAgent UDP-read occurrence in FIFO order, including repeated identical sentences. Calculate milliseconds from the two device-side `-ttt` timestamps and report sample count plus nearest-rank p50, p95, p99, and maximum. Missing GNSSAgent receive events, negative deltas, an incomplete capture, unavailable `strace`/`tcpdump`, or an unexpected process restart makes the relevant acceptance result fail with a prerequisite/invalid-capture reason; it is not a silent skip.
+
+Archive at least these files per run:
+
+```text
+uart-read.strace
+gnss-recv.strace
+udp.pcap
+tcpdump.stats.txt
+tty-before.txt
+tty-after.txt
+nmea-diff.txt
+forward-delay.csv
+summary.json
+```
+
+`tools/test_gnss_survey.py` must use synthetic captures to cover C-escape and unfinished/resumed `read()` reconstruction, decoded-length mismatch/truncation and unmatched-call rejection, leading/trailing half-sentence exclusion, exact one-to-one success, loss, duplicate, reorder and first-mismatch reporting, nonzero tcpdump-drop invalidation, FIFO matching of repeated sentences, and nearest-rank percentiles. Run it without a device:
+
+```powershell
+python -m unittest discover -s tools -p "test_*.py" -v
+```
+
+Expected: every parser/analyzer test passes. Device capture remains a later acceptance action and is not simulated as successful.
+
+- [ ] **Step 6: Run the full verification matrix**
 
 ```powershell
 go test -count=1 ./...
 go vet ./...
 go mod verify
+python -m unittest discover -s tools -p "test_*.py" -v
 pwsh -File tests/protocol_doc.test.ps1
 pwsh -File tests/architecture.test.ps1
 pwsh -File tests/build.test.ps1
@@ -1020,31 +1112,31 @@ git diff --check
 git status --short
 ```
 
-Expected: all commands pass. `git status --short` shows only the three intentional Task 13 test files until Step 7 commits them; generated build artifacts are ignored.
+Expected: all commands pass. `git status --short` shows only the five intentional Task 13 test/tool files until Step 8 commits them; generated build artifacts are ignored.
 
-- [ ] **Step 6: Run host integration and device acceptance**
+- [ ] **Step 7: Run host integration and device acceptance**
 
 Host integration must cover UDP bind retry, datagram rejection, actual UDP-to-TCP publication, no-input silence, silent `0x10`, connection limits, subscription timeout, and slow-client isolation.
 
 On every target, archive:
 
-- a side-by-side UART-owner `read()` capture and loopback UDP capture proving one complete UART NMEA maps to exactly one UDP datagram, in order, with zero loss/duplicates/reordering; reject the run as invalid if the UART-side capture itself is incomplete;
+- a passing `tools/gnss_survey.py --tee-verify` evidence directory proving one complete UART NMEA maps to exactly one UDP datagram, in order, with zero loss/duplicates/reordering and a complete UART-side capture;
 - actual `SO_RCVBUF`;
 - `SO_RXQ_OVFL` or `/proc/net/udp` drop source and totals;
-- UART-owner-to-UDP `forward_delay` p50/p95/p99/max from the external UART-owner validation process;
+- UART-owner-to-GNSSAgent UDP-read `forward_delay` sample count and p50/p95/p99/max from the same tee-verifier run;
 - GPS/BeiDou/combined-mode status samples;
-- 24-hour memory, process-exit, old-field, and UDP-drop results.
+- 24-hour memory, process-exit, old-field, and UDP-drop results, with the persistent `LOG_FILE` copied to the host evidence directory before teardown or redeployment.
 
-This repository task does not add UART inspection or link-budget scripts. The external owner-process team performs UART-to-UDP fidelity capture described by the requirements.
+The GNSSAgent repository owns the tee verifier and the GNSSAgent acceptance operator runs it. The UART-owner team may supply target-specific process/UART identifiers, but GNSSAgent completion does not wait for that team to invent a separate tool. This is a one-shot host-side acceptance capture only; it does not restore UART inspection or link-budget collection to Task 12 or the deployed service.
 
-- [ ] **Step 7: Commit final conformance tests**
+- [ ] **Step 8: Commit final conformance tests and acceptance tooling**
 
 ```powershell
-git add tests/protocol_doc.test.ps1 tests/architecture.test.ps1 tests/regression/udp_baseline_test.go
+git add tests/protocol_doc.test.ps1 tests/architecture.test.ps1 tests/regression/udp_baseline_test.go tools/gnss_survey.py tools/test_gnss_survey.py
 git commit -m "test: verify UDP GNSSAgent conformance"
 ```
 
-- [ ] **Step 8: Confirm the final repository state**
+- [ ] **Step 9: Confirm the final repository state**
 
 ```powershell
 git diff --check
@@ -1067,5 +1159,6 @@ Implementation is complete only when:
 - subscription limits, timeout, latest-value queue, and slow-client isolation pass;
 - no-input silence and no-fix publication pass;
 - four target binaries build reproducibly without CGO or CCU-Audio;
-- SysV deployment contains no UART checks or link-budget collection;
-- all automated and device acceptance evidence is archived.
+- SysV deployment uses the portable shell/PID-file start path, writes to persistent `LOG_FILE`, and contains no UART checks or link-budget collection;
+- the repository-owned tee verifier proves UART-to-UDP one-to-one fidelity, capture completeness, and `forward_delay` percentiles on every target;
+- all automated and device acceptance evidence, including the persistent 24-hour log, is archived.
