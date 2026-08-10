@@ -84,6 +84,8 @@ internal/server/server.go
 internal/server/server_test.go
 internal/observe/stats.go
 internal/observe/stats_test.go
+internal/observe/rotating_file.go
+internal/observe/rotating_file_test.go
 internal/app/app.go
 internal/app/app_test.go
 cmd/gnssagent/main.go
@@ -131,6 +133,8 @@ func TestParseDefaultsAreTargetIndependent(t *testing.T) {
 				MaxConnections:       5,
 				MaxRemoteConnections: 4,
 				LogLevel:             "info",
+				LogFile:              "",
+				LogMaxBytes:          8 * 1024 * 1024,
 			}
 			if cfg != want {
 				t.Fatalf("got %+v want %+v", cfg, want)
@@ -177,9 +181,22 @@ func TestSerialFlagsNoLongerExist(t *testing.T) {
 		}
 	}
 }
+
+func TestParseLogOutputOverrides(t *testing.T) {
+	cfg, err := Parse([]string{
+		"--log-file", "/tmp/gnssagent.log",
+		"--log-max-bytes", "1048576",
+	}, "ccu")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.LogFile != "/tmp/gnssagent.log" || cfg.LogMaxBytes != 1048576 {
+		t.Fatalf("unexpected log config: %+v", cfg)
+	}
+}
 ```
 
-Keep the existing exact tests for positional arguments and TCP connection-limit boundaries, but update their expected `Config` values and replace `--listen` with `--tcp-listen`.
+Keep the existing exact tests for positional arguments and TCP connection-limit boundaries, but update their expected `Config` values and replace `--listen` with `--tcp-listen`. Add `0` and `-1` `--log-max-bytes` rejection cases to the invalid-value table.
 
 - [ ] **Step 2: Run tests and verify the intended RED state**
 
@@ -187,7 +204,7 @@ Keep the existing exact tests for positional arguments and TCP connection-limit 
 go test -count=1 ./internal/config -v
 ```
 
-Expected: tests fail because `UDPListenAddress` and `TCPListenAddress` do not exist, serial fields still exist, and unknown targets still require a serial path.
+Expected: tests fail because the UDP/TCP and bounded-log fields do not exist, serial fields still exist, and unknown targets still require a serial path.
 
 - [ ] **Step 3: Implement the exact UDP-oriented configuration**
 
@@ -210,6 +227,8 @@ type Config struct {
 	MaxConnections       int
 	MaxRemoteConnections int
 	LogLevel             string
+	LogFile              string
+	LogMaxBytes          int64
 }
 
 func Parse(args []string, target string) (Config, error) {
@@ -220,6 +239,8 @@ func Parse(args []string, target string) (Config, error) {
 		MaxConnections:       5,
 		MaxRemoteConnections: 4,
 		LogLevel:             "info",
+		LogFile:              "",
+		LogMaxBytes:          8 * 1024 * 1024,
 	}
 
 	fs := flag.NewFlagSet("gnssagent", flag.ContinueOnError)
@@ -228,6 +249,8 @@ func Parse(args []string, target string) (Config, error) {
 	fs.IntVar(&cfg.MaxConnections, "max-connections", cfg.MaxConnections, "maximum total TCP connections")
 	fs.IntVar(&cfg.MaxRemoteConnections, "max-remote-connections", cfg.MaxRemoteConnections, "maximum non-loopback TCP connections")
 	fs.StringVar(&cfg.LogLevel, "log-level", cfg.LogLevel, "debug, info, warn, or error")
+	fs.StringVar(&cfg.LogFile, "log-file", cfg.LogFile, "rotating structured log file; empty writes to stderr")
+	fs.Int64Var(&cfg.LogMaxBytes, "log-max-bytes", cfg.LogMaxBytes, "maximum bytes per log file before one-backup rotation")
 	fs.SetOutput(io.Discard)
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err
@@ -247,6 +270,9 @@ func Parse(args []string, target string) (Config, error) {
 	}
 	if cfg.MaxRemoteConnections >= cfg.MaxConnections {
 		return Config{}, errors.New("max-remote-connections must leave at least one loopback slot")
+	}
+	if cfg.LogMaxBytes <= 0 {
+		return Config{}, errors.New("log-max-bytes must be positive")
 	}
 	return cfg, nil
 }
@@ -676,6 +702,8 @@ Expected: all session, limit, latest-value, timeout, and silent-`0x10` tests pas
 **Files:**
 - Create: `internal/observe/stats.go`
 - Create: `internal/observe/stats_test.go`
+- Create: `internal/observe/rotating_file.go`
+- Create: `internal/observe/rotating_file_test.go`
 - Create: `internal/app/app.go`
 - Create: `internal/app/app_test.go`
 - Create: `cmd/gnssagent/main.go`
@@ -696,6 +724,8 @@ Expected: all session, limit, latest-value, timeout, and silent-`0x10` tests pas
 - last checksum-valid supported NMEA time.
 
 Tests must update counters concurrently and run with `go test -race` when a CGO-enabled host is available. Do not add UART bytes, baud occupancy, overrun/frame/parity, or ICount fields.
+
+The app takes an atomic one-second snapshot/reset for measurement, optionally emits that snapshot at debug level, and adds it to a separate 60-second accumulator for the info summary. Tests must prove that accumulating 60 snapshots preserves every counter and talker/kind bucket without relying on a fixed expected NMEA count.
 
 - [ ] **Step 2: Define app boundaries and write failing assembly tests**
 
@@ -735,7 +765,38 @@ Run TCP and UDP components independently:
 
 There is no serial open/reopen loop, endpoint writer, controller, power-state observer, or control connection.
 
-- [ ] **Step 4: Add required periodic and transition logging**
+- [ ] **Step 4: Write and implement bounded rotating-file tests**
+
+Use only the standard library. Define this production boundary in `internal/observe/rotating_file.go`:
+
+```go
+type RotatingFile struct {
+	mu          sync.Mutex
+	path        string
+	maxBytes    int64
+	size        int64
+	file        *os.File
+	terminalErr error
+}
+
+func OpenRotatingFile(path string, maxBytes int64) (*RotatingFile, error)
+func (w *RotatingFile) Write(p []byte) (int, error)
+func (w *RotatingFile) Close() error
+```
+
+The implementation creates the parent directory with `0755`, opens the active file in append mode with permission `0640`, and serializes writes. Before a write that would cross `maxBytes`, when the active file is nonempty, it closes the active file, removes only `<path>.1` if present, renames `<path>` to `<path>.1`, and opens a new active file. Startup uses the existing file size, so a file already at the limit rotates before the first new record. There is exactly one backup; no `.2` file is created. A single record may exceed the cap only by that record's bytes; GNSSAgent constrains every structured record to at most 4096 bytes. A rotation failure emits one bounded diagnostic to stderr, stores a terminal writer error, and rejects all later writes without appending; it must never fall back to unlimited append.
+
+Tests with small limits must prove:
+
+- writes below/equal to the boundary do not rotate;
+- the first crossing preserves the old bytes in `.1` and writes the complete new record to the active file;
+- a second crossing replaces `.1` and never creates `.2`;
+- reopening honors pre-existing active-file size;
+- concurrent complete-record writes are race-free and never split between active and backup files;
+- invalid empty paths/non-positive limits are rejected;
+- making `<path>.1` a non-empty directory forces a rotation failure, after which later writes do not increase the active file size.
+
+- [ ] **Step 5: Add rate-limited periodic and transition logging**
 
 Use `log/slog` text output. Log at startup:
 
@@ -743,23 +804,27 @@ Use `log/slog` text output. Log at startup:
 - UDP/TCP addresses and TCP limits;
 - system Unix milliseconds and formatted UTC time;
 - requested/actual `SO_RCVBUF` and drop-observation source.
+- log destination, `log_max_bytes`, and backup count `1` without logging credentials or other secrets.
 
-Every second log an interval summary of received UDP datagrams/bytes and valid NMEA counts by talker/kind. Rate-limit repeated invalid-datagram/checksum/parser/bind/drop warnings. Emit one input-interrupted message after 5 seconds without a checksum-valid supported NMEA and one recovery message when input resumes.
+Continue measuring UDP datagrams/bytes and valid NMEA counts by talker/kind in exact one-second snapshots. Emit each one-second snapshot only at debug level. At info level, accumulate and emit one 60-second summary containing the window length and totals; do not emit 1 Hz info summaries. This preserves the requirements' per-second measurement while applying the required rate limit to periodic persistent output.
 
-Do not log a fixed expected sentence count, UART occupancy, ICount, parity/frame/overrun, or raw NMEA by default. Debug logging may sample at most one raw sentence per rate-limit interval.
+Rate-limit repeated invalid-datagram/checksum/parser/bind/drop warnings by event key to at most one info/warn record per 60 seconds and include the suppressed count in the next allowed record or 60-second summary. Emit one input-interrupted message after 5 seconds without a checksum-valid supported NMEA and one recovery message when input resumes; these are state transitions, not periodic repeats.
 
-- [ ] **Step 5: Implement `main` with UDP/TCP defaults from config**
+Do not log a fixed expected sentence count, UART occupancy, ICount, parity/frame/overrun, or raw NMEA by default. Debug logging may sample at most one raw sentence per 60-second interval. Bound any sampled raw NMEA to the already enforced 1024-byte datagram maximum and keep every complete formatted log record at or below 4096 bytes.
+
+- [ ] **Step 6: Implement `main` with UDP/TCP and bounded logging config**
 
 `cmd/gnssagent/main.go` must:
 
 1. parse `config.Parse(os.Args[1:], buildinfo.Target)`;
-2. create text `slog` with the requested level;
-3. construct the UDP manager for `UDPListenAddress`;
-4. construct the TCP server for `TCPListenAddress` and limits;
-5. run the app under `signal.NotifyContext` for SIGINT/SIGTERM;
-6. never import a serial/control package or modify the system clock.
+2. when `LogFile` is empty, create text `slog` on stderr for foreground development;
+3. when `LogFile` is nonempty, call `observe.OpenRotatingFile(LogFile, LogMaxBytes)`, create text `slog` on the returned writer, and close it during orderly shutdown; inability to open the configured persistent log is a startup error;
+4. construct the UDP manager for `UDPListenAddress`;
+5. construct the TCP server for `TCPListenAddress` and limits;
+6. run the app under `signal.NotifyContext` for SIGINT/SIGTERM;
+7. never import a serial/control package or modify the system clock.
 
-- [ ] **Step 6: Add an actual UDP-to-TCP integration test**
+- [ ] **Step 7: Add actual UDP/TCP and log-cadence integration tests**
 
 Use loopback ephemeral ports. Start the app, subscribe SIMPLE over TCP, send checksum-correct fixture lines as separate UDP datagrams, and assert one 66-byte status frame with the expected valid fields. Additional cases:
 
@@ -769,7 +834,9 @@ Use loopback ephemeral ports. Start the app, subscribe SIMPLE over TCP, send che
 - stop/restart the UDP sender: later complete cycles publish without stale fields;
 - send a valid `0x10` over TCP before subscription: no response, then normal subscription works.
 
-- [ ] **Step 7: Verify and commit app composition**
+With an injectable ticker/clock and a temporary log directory, additionally prove that info mode produces no one-second summaries and exactly one accumulated summary at 60 seconds, debug mode exposes one-second snapshots, a forced small-size rotation retains only the active file plus `.1`, and shutdown closes the log so both files can be reopened/renamed on Windows and Linux.
+
+- [ ] **Step 8: Verify and commit app composition**
 
 ```powershell
 gofmt -w cmd/gnssagent internal/app internal/observe
@@ -898,11 +965,15 @@ MAX_CONNECTIONS=5
 MAX_REMOTE_CONNECTIONS=4
 LOG_LEVEL=info
 LOG_FILE=/lib/firmware/gnssagent/log/gnssagent.log
+LOG_MAX_BYTES=8388608
+CONSOLE_LOG=/var/volatile/gnssagent-console.log
 ```
 
-`/var/log` on MMR200 resolves into volatile storage, so the default log file must remain under the persistent `/lib/firmware` filesystem. The test must reject `/var/log`, `/var/volatile`, or an empty `LOG_FILE`; it must also assert that the init script creates the parent directory and appends stdout/stderr to `LOG_FILE`.
+`/var/log` on MMR200 resolves into volatile storage, so the structured `LOG_FILE` must remain under the persistent `/lib/firmware` filesystem. The test must reject `/var/log`, `/var/volatile`, an empty `LOG_FILE`, or a non-positive `LOG_MAX_BYTES`; assert that the implementation has a fixed single `.1` backup and no configurable/unbounded backup count; and assert that the init script creates the parent directory and passes `LOG_FILE`/`LOG_MAX_BYTES` to GNSSAgent instead of using unbounded shell append.
 
-Assert init/smoke scripts contain no `/dev/tty`, `ttyUL`, baud, termios, `TIOC`, `CFGSYS`, `CFGSAVE`, GPIO, link budget, or UART capture command. Also assert that deployment does not require `start-stop-daemon`, and that the smoke script contains both `netstat -lun` and `netstat -lnt` fallbacks.
+`CONSOLE_LOG` captures only pre-logger startup errors and unexpected raw stderr. It is intentionally volatile and overwritten, not appended, on every start; periodic `slog` output goes only through the process-owned rotating file. Foreground runs with an empty `--log-file` still use stderr, while the production init configuration selects the bounded persistent sink.
+
+Assert init/smoke scripts contain no `/dev/tty`, `ttyUL`, baud, termios, `TIOC`, `CFGSYS`, `CFGSAVE`, GPIO, link budget, or UART capture command. Also assert that deployment does not require `start-stop-daemon`, that the start line uses `>` rather than `>>` for `CONSOLE_LOG`, and that the smoke script contains both `netstat -lun` and `netstat -lnt` fallbacks.
 
 - [ ] **Step 2: Implement the SysV init script**
 
@@ -913,20 +984,25 @@ The start command passes only:
 --tcp-listen "$TCP_LISTEN" \
 --max-connections "$MAX_CONNECTIONS" \
 --max-remote-connections "$MAX_REMOTE_CONNECTIONS" \
---log-level "$LOG_LEVEL"
+--log-level "$LOG_LEVEL" \
+--log-file "$LOG_FILE" \
+--log-max-bytes "$LOG_MAX_BYTES"
 ```
 
 The portable, mandatory start path is the shell pattern already used by the target-family CPDC deployment:
 
 ```sh
 mkdir -p "$(dirname "$LOG_FILE")"
+mkdir -p "$(dirname "$CONSOLE_LOG")"
 set -- "$GNSSAGENT_BIN" \
     --udp-listen "$UDP_LISTEN" \
     --tcp-listen "$TCP_LISTEN" \
     --max-connections "$MAX_CONNECTIONS" \
     --max-remote-connections "$MAX_REMOTE_CONNECTIONS" \
-    --log-level "$LOG_LEVEL"
-nohup "$@" >>"$LOG_FILE" 2>&1 </dev/null &
+    --log-level "$LOG_LEVEL" \
+    --log-file "$LOG_FILE" \
+    --log-max-bytes "$LOG_MAX_BYTES"
+nohup "$@" >"$CONSOLE_LOG" 2>&1 </dev/null &
 echo "$!" >"$PIDFILE"
 ```
 
@@ -943,7 +1019,8 @@ Implement `start`, `stop`, `restart`, and `status`. Validate an existing PID fil
 3. send each line of a known fixture as a separate UDP datagram using an available UDP-capable `nc` command;
 4. send a binary SIMPLE subscription and verify a 66-byte response;
 5. report `SO_RCVBUF`/kernel-drop information from service logs;
-6. skip with a clear prerequisite error if the target has no compatible `nc`/`od` tools.
+6. verify the active log and `.1` each stay at or below `LOG_MAX_BYTES + 4096`, and that `.2` does not exist;
+7. skip with a clear prerequisite error if the target has no compatible `nc`/`od` tools.
 
 Listener inspection must be explicit and portable:
 
@@ -963,7 +1040,7 @@ printf '%s\n' "$udp_listeners" | grep -F "${UDP_LISTEN%:*}:${UDP_LISTEN##*:}"
 printf '%s\n' "$tcp_listeners" | grep -E ":${TCP_LISTEN##*:}([[:space:]]|$)"
 ```
 
-MMR200 currently follows the `netstat` branch (`ss` is absent); `-lun` is mandatory for UDP and `-lnt` for TCP. The smoke script must also read `SO_RCVBUF`/drop evidence from `LOG_FILE` and fail clearly when the persistent log is missing.
+MMR200 currently follows the `netstat` branch (`ss` is absent); `-lun` is mandatory for UDP and `-lnt` for TCP. The smoke script must also read `SO_RCVBUF`/drop evidence from `LOG_FILE`, report active/backup sizes, fail clearly when the persistent log is missing or oversized, and prove no second backup exists.
 
 It must not inspect which process owns a UART, calculate UART bandwidth, read `/proc/tty`, or collect overrun/frame/parity counters. Those are outside Task 12 and outside the deployed GNSSAgent service.
 
@@ -1125,7 +1202,8 @@ On every target, archive:
 - `SO_RXQ_OVFL` or `/proc/net/udp` drop source and totals;
 - UART-owner-to-GNSSAgent UDP-read `forward_delay` sample count and p50/p95/p99/max from the same tee-verifier run;
 - GPS/BeiDou/combined-mode status samples;
-- 24-hour memory, process-exit, old-field, and UDP-drop results, with the persistent `LOG_FILE` copied to the host evidence directory before teardown or redeployment.
+- 24-hour memory, process-exit, old-field, and UDP-drop results, with the persistent `LOG_FILE` and optional `.1` copied to the host evidence directory before teardown or redeployment;
+- `log-size-before.txt` and `log-size-after.txt` containing active/backup byte sizes and calculated 24-hour on-device footprint change; each file must remain at or below `LOG_MAX_BYTES + 4096`, `.2` must not exist, no two default-info periodic summaries may be less than 55 seconds apart, and the 24-hour summary count must not exceed 1441.
 
 The GNSSAgent repository owns the tee verifier and the GNSSAgent acceptance operator runs it. The UART-owner team may supply target-specific process/UART identifiers, but GNSSAgent completion does not wait for that team to invent a separate tool. This is a one-shot host-side acceptance capture only; it does not restore UART inspection or link-budget collection to Task 12 or the deployed service.
 
@@ -1158,7 +1236,8 @@ Implementation is complete only when:
 - a TCP `0x10` frame is silent and the connection remains usable;
 - subscription limits, timeout, latest-value queue, and slow-client isolation pass;
 - no-input silence and no-fix publication pass;
+- default info logging emits 60-second summaries, one-second summaries are debug-only, and repeated warnings are rate-limited;
 - four target binaries build reproducibly without CGO or CCU-Audio;
-- SysV deployment uses the portable shell/PID-file start path, writes to persistent `LOG_FILE`, and contains no UART checks or link-budget collection;
+- SysV deployment uses the portable shell/PID-file start path, writes through the process-owned 8 MiB plus one-backup rotating `LOG_FILE`, and contains no UART checks or link-budget collection;
 - the repository-owned tee verifier proves UART-to-UDP one-to-one fidelity, capture completeness, and `forward_delay` percentiles on every target;
-- all automated and device acceptance evidence, including the persistent 24-hour log, is archived.
+- all automated and device acceptance evidence, including the persistent 24-hour logs and measured log-footprint change, is archived.
