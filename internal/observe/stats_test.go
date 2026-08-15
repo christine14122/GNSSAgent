@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"gnssagent/internal/nmea"
+	"gnssagent/internal/protocol"
 	"gnssagent/internal/udpinput"
 )
 
@@ -23,8 +24,10 @@ func TestStatsSnapshotAndReset(t *testing.T) {
 	stats.RecordGSVIncomplete()
 	stats.RecordPublishedCycle()
 	stats.RecordTCPConnection()
+	stats.RecordTCPDisconnection()
 	stats.RecordTCPRejection()
-	stats.RecordTCPSubscription()
+	stats.RecordTCPSubscription(protocol.StatusSimple)
+	stats.RecordTCPSubscription(protocol.StatusFull)
 	stats.RecordSlowClientReplacement()
 
 	got := stats.SnapshotReset()
@@ -43,7 +46,7 @@ func TestStatsSnapshotAndReset(t *testing.T) {
 	if got.GSVComplete != 1 || got.GSVIncomplete != 1 || got.PublishedCycles != 1 {
 		t.Fatalf("cycle counters = %+v", got)
 	}
-	if got.TCPConnections != 1 || got.TCPRejections != 1 || got.TCPSubscriptions != 1 || got.SlowClientReplacements != 1 {
+	if got.TCPConnections != 1 || got.TCPDisconnections != 1 || got.TCPRejections != 1 || got.TCPSubscriptions != 2 || got.TCPSimpleSubscriptions != 1 || got.TCPFullSubscriptions != 1 || got.SlowClientReplacements != 1 {
 		t.Fatalf("TCP counters = %+v", got)
 	}
 

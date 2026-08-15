@@ -327,7 +327,6 @@ func TestServerObserverReceivesLifecycleEvents(t *testing.T) {
 	}()
 
 	active := listener.connect(t, remoteSourceAddr)
-	defer active.Close()
 	writeAll(t, active, protocol.EncodeSubscribeRequest(protocol.StatusFull))
 	assertACK(t, active, protocol.SubscribeSuccess)
 	rejected := listener.connect(t, remoteSourceAddr)
@@ -341,7 +340,11 @@ func TestServerObserverReceivesLifecycleEvents(t *testing.T) {
 	server.Publish(model.FullStatus{FieldValidityMask: model.FullUsedSatellitesValid, UsedSatellites: 1})
 	server.Publish(model.FullStatus{FieldValidityMask: model.FullUsedSatellitesValid, UsedSatellites: 2})
 	waitObserver(t, observer, func(snapshot observerSnapshot) bool {
-		return snapshot.connections == 2 && snapshot.rejections == 1 && snapshot.subscriptions == 1 && snapshot.replacements >= 1
+		return snapshot.connections == 2 && snapshot.rejections == 1 && snapshot.fullSubscriptions == 1 && snapshot.replacements >= 1
+	})
+	_ = active.Close()
+	waitObserver(t, observer, func(snapshot observerSnapshot) bool {
+		return snapshot.disconnections == 2
 	})
 }
 
@@ -502,10 +505,12 @@ func runTestServer(t *testing.T, server *Server) (context.CancelFunc, <-chan err
 }
 
 type observerSnapshot struct {
-	connections   int
-	rejections    int
-	subscriptions int
-	replacements  int
+	connections         int
+	disconnections      int
+	rejections          int
+	simpleSubscriptions int
+	fullSubscriptions   int
+	replacements        int
 }
 
 type recordingObserver struct {
@@ -525,10 +530,20 @@ func (o *recordingObserver) RecordTCPRejection() {
 	o.snapshot.rejections++
 }
 
-func (o *recordingObserver) RecordTCPSubscription() {
+func (o *recordingObserver) RecordTCPDisconnection() {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	o.snapshot.subscriptions++
+	o.snapshot.disconnections++
+}
+
+func (o *recordingObserver) RecordTCPSubscription(statusType protocol.StatusType) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if statusType == protocol.StatusSimple {
+		o.snapshot.simpleSubscriptions++
+	} else if statusType == protocol.StatusFull {
+		o.snapshot.fullSubscriptions++
+	}
 }
 
 func (o *recordingObserver) RecordSlowClientReplacement() {

@@ -222,7 +222,7 @@ func TestManagerRetriesBindWithFixedBackoff(t *testing.T) {
 		t.Fatalf("input events = %d, want %d", len(sink.events), len(want))
 	}
 	for index, event := range sink.events {
-		if event.Kind != InputBindFailed || event.Err == nil || event.RetryIn != want[index] {
+		if event.Kind != InputBindFailed || event.Err == nil || event.RetryIn != want[index] || event.Attempt != uint32(index+1) {
 			t.Fatalf("event %d = %+v", index, event)
 		}
 	}
@@ -304,7 +304,7 @@ func TestManagerCancellationClosesCurrentSocket(t *testing.T) {
 	if sink.resets != 0 {
 		t.Fatalf("context cancellation caused %d resets", sink.resets)
 	}
-	if len(sink.events) != 1 || sink.events[0].Kind != InputSocketReady || sink.events[0].Recovered {
+	if len(sink.events) != 2 || sink.events[0].Kind != InputSocketReady || sink.events[0].Recovered || sink.events[1].Kind != InputSocketClosed {
 		t.Fatalf("initial socket event = %#v", sink.events)
 	}
 }

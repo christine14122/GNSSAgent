@@ -80,6 +80,7 @@ type App struct {
 	aggregateMu   sync.Mutex
 	aggregator    *aggregate.Aggregator
 	flushDeadline time.Time
+	currentHasGSV bool
 
 	publishMu    sync.Mutex
 	publishQueue []model.FullStatus
@@ -155,7 +156,12 @@ func (a *App) Run(ctx context.Context) error {
 				a.waitForComponents(serverDone, nil)
 				return nil
 			}
-			a.logger.Error("UDP input stopped unexpectedly", "error", err)
+			cancel()
+			a.waitForComponents(serverDone, nil)
+			if err == nil {
+				return errors.New("UDP input stopped unexpectedly")
+			}
+			return errors.Join(errors.New("UDP input stopped unexpectedly"), err)
 		case <-ctx.Done():
 			cancel()
 			a.waitForComponents(serverDone, inputDone)
@@ -228,7 +234,15 @@ func (a *App) onTick(now time.Time) {
 			"udp_rejects", snapshot.UDPRejects,
 			"valid_nmea", snapshot.ValidNMEA,
 			"kernel_drops", snapshot.KernelDrops,
-			"published_cycles", snapshot.PublishedCycles)
+			"gsv_complete", snapshot.GSVComplete,
+			"gsv_incomplete", snapshot.GSVIncomplete,
+			"published_cycles", snapshot.PublishedCycles,
+			"tcp_connections", snapshot.TCPConnections,
+			"tcp_disconnections", snapshot.TCPDisconnections,
+			"tcp_rejections", snapshot.TCPRejections,
+			"tcp_simple_subscriptions", snapshot.TCPSimpleSubscriptions,
+			"tcp_full_subscriptions", snapshot.TCPFullSubscriptions,
+			"slow_client_replacements", snapshot.SlowClientReplacements)
 	}
 
 	a.stateMu.Lock()
@@ -261,7 +275,17 @@ func (a *App) onTick(now time.Time) {
 			"parser_failures", summary.ParserFailures,
 			"valid_nmea", summary.ValidNMEA,
 			"kernel_drops", summary.KernelDrops,
-			"published_cycles", summary.PublishedCycles)
+			"kernel_drops_by_source", summary.KernelDropsBySource,
+			"gsv_complete", summary.GSVComplete,
+			"gsv_incomplete", summary.GSVIncomplete,
+			"published_cycles", summary.PublishedCycles,
+			"tcp_connections", summary.TCPConnections,
+			"tcp_disconnections", summary.TCPDisconnections,
+			"tcp_rejections", summary.TCPRejections,
+			"tcp_subscriptions", summary.TCPSubscriptions,
+			"tcp_simple_subscriptions", summary.TCPSimpleSubscriptions,
+			"tcp_full_subscriptions", summary.TCPFullSubscriptions,
+			"slow_client_replacements", summary.SlowClientReplacements)
 	}
 	if becameInterrupted {
 		a.logger.Warn("GNSS input interrupted", "silence_seconds", 5)
@@ -275,8 +299,11 @@ func (a *App) onFlushDeadline(now time.Time) {
 		return
 	}
 	status, ready := a.aggregator.FlushExpired(now)
+	hadGSV := a.currentHasGSV
 	a.flushDeadline = time.Time{}
+	a.currentHasGSV = false
 	if ready {
+		a.recordGSVCompleteness(status, hadGSV)
 		a.offerStatus(status)
 	}
 	a.aggregateMu.Unlock()
@@ -329,12 +356,20 @@ func (s *inputSink) Sentence(sentence nmea.Sentence) {
 	s.app.stats.RecordValidNMEA(sentence.Talker, sentence.Kind, sentence.ReceivedAt)
 	s.app.recoverInput(sentence.ReceivedAt)
 	s.app.aggregateMu.Lock()
+	hadGSV := s.app.currentHasGSV
 	status, ready := s.app.aggregator.Add(sentence)
 	if ready {
+		s.app.recordGSVCompleteness(status, hadGSV)
 		s.app.offerStatus(status)
+		s.app.currentHasGSV = sentence.Kind == nmea.KindGSV
 		s.app.scheduleFlushLocked(sentence.ReceivedAt)
-	} else if s.app.flushDeadline.IsZero() {
-		s.app.scheduleFlushLocked(sentence.ReceivedAt)
+	} else {
+		if sentence.Kind == nmea.KindGSV {
+			s.app.currentHasGSV = true
+		}
+		if s.app.flushDeadline.IsZero() {
+			s.app.scheduleFlushLocked(sentence.ReceivedAt)
+		}
 	}
 	s.app.aggregateMu.Unlock()
 }
@@ -343,6 +378,7 @@ func (s *inputSink) Reset() {
 	s.app.aggregateMu.Lock()
 	s.app.aggregator.Clear()
 	s.app.flushDeadline = time.Time{}
+	s.app.currentHasGSV = false
 	s.app.flushTimer.Stop()
 	s.app.aggregateMu.Unlock()
 }
@@ -353,6 +389,21 @@ func (a *App) scheduleFlushLocked(firstReceivedAt time.Time) {
 	}
 	a.flushDeadline = firstReceivedAt.Add(aggregateFlushDelay)
 	a.flushTimer.Reset(a.flushDeadline)
+}
+
+func (a *App) recordGSVCompleteness(status model.FullStatus, hadGSV bool) {
+	if !hadGSV {
+		return
+	}
+	const completeMask = model.FullGPSSatellitesValid |
+		model.FullBeiDouSatellitesValid |
+		model.FullGLONASSSatellitesValid |
+		model.FullGalileoSatellitesValid
+	if status.FieldValidityMask&completeMask != 0 {
+		a.stats.RecordGSVComplete()
+	} else {
+		a.stats.RecordGSVIncomplete()
+	}
 }
 
 func (s *inputSink) DatagramRejected(reason udpinput.RejectReason) {
@@ -375,18 +426,33 @@ func (s *inputSink) KernelDrops(delta uint64, source udpinput.DropSource) {
 }
 
 func (s *inputSink) InputEvent(event udpinput.InputEvent) {
-	if event.Kind != udpinput.InputSocketReady {
-		return
-	}
-	info := event.SocketInfo
-	s.app.logger.Info("UDP input socket ready",
-		"requested_rcvbuf", info.RequestedReadBuffer,
-		"actual_rcvbuf", info.ActualReadBuffer,
-		"kernel_rcvbuf", info.KernelReadBuffer,
-		"drop_source", info.DropSource,
-		"recovered", event.Recovered)
-	if info.ActualReadBuffer > 0 && info.ActualReadBuffer < info.RequestedReadBuffer {
-		s.app.warnRateLimited("small-rcvbuf", "UDP receive buffer below requested size",
-			"requested", info.RequestedReadBuffer, "actual", info.ActualReadBuffer)
+	switch event.Kind {
+	case udpinput.InputBindFailed:
+		s.app.warnRateLimited("udp-bind", "UDP input bind failed",
+			"error", event.Err, "attempt", event.Attempt, "retry_in", event.RetryIn)
+	case udpinput.InputReadFailed:
+		s.app.warnRateLimited("udp-read", "UDP input read failed",
+			"error", event.Err, "attempt", event.Attempt, "retry_in", event.RetryIn)
+	case udpinput.InputSocketReady:
+		info := event.SocketInfo
+		s.app.logger.Info("UDP input socket ready",
+			"requested_rcvbuf", info.RequestedReadBuffer,
+			"actual_rcvbuf", info.ActualReadBuffer,
+			"kernel_rcvbuf", info.KernelReadBuffer,
+			"drop_source", info.DropSource,
+			"recovered", event.Recovered)
+		if event.Recovered {
+			s.app.logger.Info("UDP input recovered")
+		}
+		if info.DropSource == udpinput.DropUnavailable {
+			s.app.warnRateLimited("drop-unavailable", "UDP drop observation unavailable")
+		}
+		if info.ActualReadBuffer > 0 && info.ActualReadBuffer < info.RequestedReadBuffer {
+			s.app.warnRateLimited("small-rcvbuf", "UDP receive buffer below requested size",
+				"requested", info.RequestedReadBuffer, "actual", info.ActualReadBuffer,
+				"kernel", info.KernelReadBuffer)
+		}
+	case udpinput.InputSocketClosed:
+		s.app.logger.Info("UDP input socket closed")
 	}
 }

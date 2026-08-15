@@ -13,12 +13,14 @@ import (
 	"gnssagent/internal/model"
 	"gnssagent/internal/nmea"
 	"gnssagent/internal/observe"
+	"gnssagent/internal/protocol"
 	"gnssagent/internal/udpinput"
 )
 
 type fakeUDPInput struct {
 	started chan udpinput.Sink
 	stopped chan struct{}
+	runErr  error
 }
 
 func newFakeUDPInput() *fakeUDPInput {
@@ -27,6 +29,9 @@ func newFakeUDPInput() *fakeUDPInput {
 
 func (f *fakeUDPInput) Run(ctx context.Context, sink udpinput.Sink) error {
 	f.started <- sink
+	if f.runErr != nil {
+		return f.runErr
+	}
 	<-ctx.Done()
 	close(f.stopped)
 	return ctx.Err()
@@ -216,6 +221,30 @@ func TestNoFixInputPublishesExplicitInvalidValue(t *testing.T) {
 	}
 }
 
+func TestPublishedCyclesRecordGSVCompleteness(t *testing.T) {
+	harness := startAppHarness(t, slog.LevelInfo)
+	defer harness.stop(t)
+	sink := harness.sink(t)
+	base := time.Date(2026, 8, 15, 0, 0, 0, 0, time.UTC)
+
+	sink.Sentence(ggaSentence(base, 1, 1))
+	sink.Sentence(gsvSentence(base.Add(100*time.Millisecond), 1, 1, 0))
+	sink.Sentence(ggaSentence(base.Add(time.Second), 2, 1))
+	_ = receiveStatus(t, harness.server.published)
+	complete := harness.app.stats.SnapshotReset()
+	if complete.GSVComplete != 1 || complete.GSVIncomplete != 0 {
+		t.Fatalf("complete GSV counters = %+v", complete)
+	}
+
+	sink.Sentence(gsvSentence(base.Add(1100*time.Millisecond), 2, 1, 5))
+	sink.Sentence(ggaSentence(base.Add(2*time.Second), 3, 1))
+	_ = receiveStatus(t, harness.server.published)
+	incomplete := harness.app.stats.SnapshotReset()
+	if incomplete.GSVComplete != 0 || incomplete.GSVIncomplete != 1 {
+		t.Fatalf("incomplete GSV counters = %+v", incomplete)
+	}
+}
+
 func TestSlowPublisherDoesNotBlockUDPSink(t *testing.T) {
 	gate := make(chan struct{})
 	harness := startAppHarnessWithGate(t, slog.LevelInfo, gate)
@@ -295,11 +324,41 @@ func TestTCPStartFailureStopsApp(t *testing.T) {
 	}
 }
 
+func TestUnexpectedUDPInputExitStopsApp(t *testing.T) {
+	input := newFakeUDPInput()
+	want := errors.New("input failed")
+	input.runErr = want
+	server := newFakeStatusServer()
+	app := newApp(input, server, observe.NewStats(), slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)), newManualTicker(), newManualDeadlineTimer(), time.Now)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- app.Run(ctx) }()
+	select {
+	case err := <-done:
+		if !errors.Is(err, want) {
+			t.Fatalf("Run error = %v, want %v", err, want)
+		}
+	case <-time.After(100 * time.Millisecond):
+		cancel()
+		<-done
+		t.Fatal("App continued running after UDP input exited")
+	}
+}
+
 func TestInfoSummaryIsSixtySecondsAndDebugRetainsOneSecondSnapshots(t *testing.T) {
 	info := startAppHarness(t, slog.LevelInfo)
 	sink := info.sink(t)
+	info.app.stats.RecordGSVComplete()
+	info.app.stats.RecordGSVIncomplete()
+	info.app.stats.RecordTCPConnection()
+	info.app.stats.RecordTCPDisconnection()
+	info.app.stats.RecordTCPRejection()
+	info.app.stats.RecordTCPSubscription(protocol.StatusSimple)
+	info.app.stats.RecordTCPSubscription(protocol.StatusFull)
+	info.app.stats.RecordSlowClientReplacement()
 	for i := 0; i < 59; i++ {
-		sink.(interface{ DatagramReceived(int) }).DatagramReceived(10)
+		sink.DatagramReceived(10)
 		info.ticker.ch <- info.startedAt.Add(time.Duration(i+1) * time.Second)
 	}
 	waitFor(t, func() bool { return info.app.summaryIntervals() == 59 })
@@ -311,11 +370,20 @@ func TestInfoSummaryIsSixtySecondsAndDebugRetainsOneSecondSnapshots(t *testing.T
 	if strings.Contains(info.logs.String(), "one-second input summary") {
 		t.Fatalf("info log contains debug snapshots: %s", info.logs.String())
 	}
+	for _, field := range []string{
+		"gsv_complete=1", "gsv_incomplete=1", "tcp_connections=1", "tcp_disconnections=1",
+		"tcp_rejections=1", "tcp_simple_subscriptions=1", "tcp_full_subscriptions=1",
+		"slow_client_replacements=1",
+	} {
+		if !strings.Contains(info.logs.String(), field) {
+			t.Fatalf("info summary is missing %s: %s", field, info.logs.String())
+		}
+	}
 	info.stop(t)
 
 	debug := startAppHarness(t, slog.LevelDebug)
 	debugSink := debug.sink(t)
-	debugSink.(interface{ DatagramReceived(int) }).DatagramReceived(10)
+	debugSink.DatagramReceived(10)
 	debug.ticker.ch <- debug.startedAt.Add(time.Second)
 	waitFor(t, func() bool { return strings.Contains(debug.logs.String(), "one-second input summary") })
 	debug.stop(t)
@@ -350,6 +418,44 @@ func TestRepeatedWarningsAreRateLimitedWithSuppressedCount(t *testing.T) {
 	sink.DatagramRejected(udpinput.RejectNUL)
 	if got := strings.Count(logs.String(), "UDP datagram rejected"); got != 2 || !strings.Contains(logs.String(), "suppressed=2") {
 		t.Fatalf("rate-limit follow-up missing suppressed count: %s", logs.String())
+	}
+}
+
+func TestInputLifecycleEventsAreLoggedAndRateLimited(t *testing.T) {
+	logs := &bytes.Buffer{}
+	now := time.Date(2026, 8, 15, 0, 0, 0, 0, time.UTC)
+	app := newApp(newFakeUDPInput(), newFakeStatusServer(), observe.NewStats(), slog.New(slog.NewTextHandler(logs, nil)), newManualTicker(), newManualDeadlineTimer(), func() time.Time { return now })
+	sink := &inputSink{app: app}
+
+	sink.InputEvent(udpinput.InputEvent{Kind: udpinput.InputBindFailed, Err: errors.New("bind"), RetryIn: time.Second})
+	sink.InputEvent(udpinput.InputEvent{Kind: udpinput.InputBindFailed, Err: errors.New("bind again"), RetryIn: 2 * time.Second})
+	if got := strings.Count(logs.String(), "UDP input bind failed"); got != 1 {
+		t.Fatalf("bind warning count = %d: %s", got, logs.String())
+	}
+	now = now.Add(61 * time.Second)
+	sink.InputEvent(udpinput.InputEvent{Kind: udpinput.InputBindFailed, Err: errors.New("bind later"), RetryIn: 4 * time.Second})
+	if !strings.Contains(logs.String(), "suppressed=1") {
+		t.Fatalf("bind suppression count missing: %s", logs.String())
+	}
+	sink.InputEvent(udpinput.InputEvent{Kind: udpinput.InputReadFailed, Err: errors.New("read"), RetryIn: time.Second})
+	sink.InputEvent(udpinput.InputEvent{
+		Kind:      udpinput.InputSocketReady,
+		Recovered: true,
+		SocketInfo: udpinput.SocketInfo{
+			RequestedReadBuffer: 256 * 1024,
+			ActualReadBuffer:    128 * 1024,
+			KernelReadBuffer:    256 * 1024,
+			DropSource:          udpinput.DropUnavailable,
+		},
+	})
+	sink.InputEvent(udpinput.InputEvent{Kind: udpinput.InputSocketClosed})
+	for _, message := range []string{
+		"UDP input read failed", "UDP input socket ready", "UDP input recovered",
+		"UDP drop observation unavailable", "UDP input socket closed",
+	} {
+		if !strings.Contains(logs.String(), message) {
+			t.Fatalf("lifecycle log is missing %q: %s", message, logs.String())
+		}
 	}
 }
 
@@ -420,6 +526,19 @@ func ggaSentence(receivedAt time.Time, second int64, quality uint8) nmea.Sentenc
 			MillisOfDay: second * 1000,
 			TimeValid:   true,
 			Quality:     nmea.Field[uint8]{Value: quality, Valid: true},
+		},
+	}
+}
+
+func gsvSentence(receivedAt time.Time, total, number int, visible uint8) nmea.Sentence {
+	return nmea.Sentence{
+		Talker:     "GP",
+		Kind:       nmea.KindGSV,
+		ReceivedAt: receivedAt,
+		GSV: &nmea.GSV{
+			TotalMessages: total,
+			MessageNumber: number,
+			VisibleCount:  nmea.Field[uint8]{Value: visible, Valid: true},
 		},
 	}
 }

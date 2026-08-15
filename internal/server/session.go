@@ -98,7 +98,7 @@ func (s *session) handleSubscribe(frame protocol.Frame) bool {
 		return false
 	}
 	if s.observer != nil {
-		s.observer.RecordTCPSubscription()
+		s.observer.RecordTCPSubscription(statusType)
 	}
 	if err := s.conn.SetReadDeadline(time.Time{}); err != nil {
 		return false

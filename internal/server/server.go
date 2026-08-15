@@ -18,8 +18,9 @@ type tryReadFunc func(net.Conn, []byte) (int, bool)
 
 type Observer interface {
 	RecordTCPConnection()
+	RecordTCPDisconnection()
 	RecordTCPRejection()
-	RecordTCPSubscription()
+	RecordTCPSubscription(protocol.StatusType)
 	RecordSlowClientReplacement()
 }
 
@@ -93,6 +94,9 @@ func (s *Server) Run(ctx context.Context) error {
 			s.wg.Add(1)
 			go func() {
 				defer s.wg.Done()
+				if s.observer != nil {
+					defer s.observer.RecordTCPDisconnection()
+				}
 				s.rejectFull(conn)
 			}()
 			continue
@@ -107,6 +111,9 @@ func (s *Server) Run(ctx context.Context) error {
 		go func() {
 			defer s.wg.Done()
 			defer release()
+			if session.observer != nil {
+				defer session.observer.RecordTCPDisconnection()
+			}
 			session.run()
 			s.sessionsMu.Lock()
 			delete(s.sessions, session)

@@ -24,12 +24,14 @@ const (
 	InputBindFailed InputEventKind = iota + 1
 	InputReadFailed
 	InputSocketReady
+	InputSocketClosed
 )
 
 type InputEvent struct {
 	Kind       InputEventKind
 	Err        error
 	RetryIn    time.Duration
+	Attempt    uint32
 	SocketInfo SocketInfo
 	Recovered  bool
 }
@@ -53,11 +55,13 @@ func newManager(address string, factory socketFactory, sleep sleepFunc) *Manager
 func (m *Manager) Run(ctx context.Context, sink Sink) error {
 	retry := newBackoff()
 	recovering := false
+	var attempt uint32
 	for ctx.Err() == nil {
 		socket, err := m.factory.Listen(m.address)
 		if err != nil {
 			delay := retry.Next()
-			sink.InputEvent(InputEvent{Kind: InputBindFailed, Err: err, RetryIn: delay})
+			attempt++
+			sink.InputEvent(InputEvent{Kind: InputBindFailed, Err: err, RetryIn: delay, Attempt: attempt})
 			recovering = true
 			if !m.sleep(ctx, delay) {
 				return nil
@@ -72,6 +76,7 @@ func (m *Manager) Run(ctx context.Context, sink Sink) error {
 		retry.Reset()
 		sink.InputEvent(InputEvent{Kind: InputSocketReady, SocketInfo: socket.Info(), Recovered: recovering})
 		recovering = false
+		attempt = 0
 
 		stopClose := context.AfterFunc(ctx, func() {
 			_ = socket.Close()
@@ -80,12 +85,14 @@ func (m *Manager) Run(ctx context.Context, sink Sink) error {
 		stopClose()
 		_ = socket.Close()
 		if ctx.Err() != nil {
+			sink.InputEvent(InputEvent{Kind: InputSocketClosed})
 			return nil
 		}
 		if err != nil {
 			sink.Reset()
 			delay := retry.Next()
-			sink.InputEvent(InputEvent{Kind: InputReadFailed, Err: err, RetryIn: delay})
+			attempt++
+			sink.InputEvent(InputEvent{Kind: InputReadFailed, Err: err, RetryIn: delay, Attempt: attempt})
 			recovering = true
 			if !m.sleep(ctx, delay) {
 				return nil

@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"gnssagent/internal/nmea"
+	"gnssagent/internal/protocol"
 	"gnssagent/internal/udpinput"
 )
 
@@ -26,8 +27,11 @@ type Snapshot struct {
 	GSVIncomplete          uint64
 	PublishedCycles        uint64
 	TCPConnections         uint64
+	TCPDisconnections      uint64
 	TCPRejections          uint64
 	TCPSubscriptions       uint64
+	TCPSimpleSubscriptions uint64
+	TCPFullSubscriptions   uint64
 	SlowClientReplacements uint64
 	LastValidNMEA          time.Time
 }
@@ -42,8 +46,11 @@ func (s *Snapshot) Add(other Snapshot) {
 	s.GSVIncomplete += other.GSVIncomplete
 	s.PublishedCycles += other.PublishedCycles
 	s.TCPConnections += other.TCPConnections
+	s.TCPDisconnections += other.TCPDisconnections
 	s.TCPRejections += other.TCPRejections
 	s.TCPSubscriptions += other.TCPSubscriptions
+	s.TCPSimpleSubscriptions += other.TCPSimpleSubscriptions
+	s.TCPFullSubscriptions += other.TCPFullSubscriptions
 	s.SlowClientReplacements += other.SlowClientReplacements
 	if other.LastValidNMEA.After(s.LastValidNMEA) {
 		s.LastValidNMEA = other.LastValidNMEA
@@ -160,9 +167,23 @@ func (s *Stats) RecordTCPRejection() {
 	s.interval.TCPRejections++
 }
 
-func (s *Stats) RecordTCPSubscription() {
+func (s *Stats) RecordTCPDisconnection() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.interval.TCPDisconnections++
+}
+
+func (s *Stats) RecordTCPSubscription(statusType protocol.StatusType) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	switch statusType {
+	case protocol.StatusSimple:
+		s.interval.TCPSimpleSubscriptions++
+	case protocol.StatusFull:
+		s.interval.TCPFullSubscriptions++
+	default:
+		return
+	}
 	s.interval.TCPSubscriptions++
 }
 
