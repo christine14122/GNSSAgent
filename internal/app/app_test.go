@@ -33,18 +33,20 @@ func (f *fakeUDPInput) Run(ctx context.Context, sink udpinput.Sink) error {
 }
 
 type fakeStatusServer struct {
-	started     chan struct{}
-	stopped     chan struct{}
-	published   chan model.FullStatus
-	publishGate <-chan struct{}
-	runErr      error
+	started        chan struct{}
+	stopped        chan struct{}
+	published      chan model.FullStatus
+	publishEntered chan struct{}
+	publishGate    <-chan struct{}
+	runErr         error
 }
 
 func newFakeStatusServer() *fakeStatusServer {
 	return &fakeStatusServer{
-		started:   make(chan struct{}),
-		stopped:   make(chan struct{}),
-		published: make(chan model.FullStatus, 16),
+		started:        make(chan struct{}),
+		stopped:        make(chan struct{}),
+		published:      make(chan model.FullStatus, 16),
+		publishEntered: make(chan struct{}, 16),
 	}
 }
 
@@ -59,6 +61,10 @@ func (f *fakeStatusServer) Run(ctx context.Context) error {
 }
 
 func (f *fakeStatusServer) Publish(status model.FullStatus) {
+	select {
+	case f.publishEntered <- struct{}{}:
+	default:
+	}
 	if f.publishGate != nil {
 		<-f.publishGate
 	}
@@ -77,6 +83,26 @@ func newManualTicker() *manualTicker {
 
 func (t *manualTicker) C() <-chan time.Time { return t.ch }
 func (t *manualTicker) Stop()               { t.once.Do(func() { close(t.stopped) }) }
+
+type manualDeadlineTimer struct {
+	ch        chan time.Time
+	deadlines chan time.Time
+	stops     chan struct{}
+}
+
+func newManualDeadlineTimer() *manualDeadlineTimer {
+	return &manualDeadlineTimer{
+		ch:        make(chan time.Time, 16),
+		deadlines: make(chan time.Time, 16),
+		stops:     make(chan struct{}, 16),
+	}
+}
+
+func (t *manualDeadlineTimer) C() <-chan time.Time { return t.ch }
+func (t *manualDeadlineTimer) Reset(deadline time.Time) {
+	t.deadlines <- deadline
+}
+func (t *manualDeadlineTimer) Stop() { t.stops <- struct{}{} }
 
 type synchronizedBuffer struct {
 	mu     sync.Mutex
@@ -129,15 +155,23 @@ func TestSentenceTransitionPublishesAtMostOncePerUTCSecond(t *testing.T) {
 	assertNoStatus(t, harness.server.published)
 }
 
-func TestFlushTickerPublishesAfterOnePointFiveSeconds(t *testing.T) {
+func TestFlushDeadlinePublishesAfterOnePointFiveSeconds(t *testing.T) {
 	harness := startAppHarness(t, slog.LevelInfo)
 	defer harness.stop(t)
 	sink := harness.sink(t)
 	base := time.Date(2026, 8, 15, 0, 0, 0, 0, time.UTC)
 	sink.Sentence(ggaSentence(base, 1, 1))
-	harness.ticker.ch <- base.Add(1499 * time.Millisecond)
+	select {
+	case deadline := <-harness.flushTimer.deadlines:
+		if want := base.Add(1500 * time.Millisecond); !deadline.Equal(want) {
+			t.Fatalf("flush deadline = %v, want %v", deadline, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("first sentence did not schedule a flush deadline")
+	}
+	harness.flushTimer.ch <- base.Add(1499 * time.Millisecond)
 	assertNoStatus(t, harness.server.published)
-	harness.ticker.ch <- base.Add(1500 * time.Millisecond)
+	harness.flushTimer.ch <- base.Add(1500 * time.Millisecond)
 	_ = receiveStatus(t, harness.server.published)
 }
 
@@ -152,7 +186,7 @@ func TestResetClearsIncompleteAggregateCycle(t *testing.T) {
 	sink.Sentence(withPosition)
 	sink.Reset()
 	sink.Sentence(ggaSentence(base.Add(time.Second), 2, 1))
-	harness.ticker.ch <- base.Add(3 * time.Second)
+	harness.flushTimer.ch <- base.Add(3 * time.Second)
 	status := receiveStatus(t, harness.server.published)
 	if status.FieldValidityMask&(model.FullLatitudeValid|model.FullLongitudeValid) != 0 {
 		t.Fatalf("pre-reset position leaked: %+v", status)
@@ -204,6 +238,29 @@ func TestSlowPublisherDoesNotBlockUDPSink(t *testing.T) {
 	harness.stop(t)
 }
 
+func TestSlowPublisherDoesNotDropGloballyQueuedStatuses(t *testing.T) {
+	gate := make(chan struct{})
+	harness := startAppHarnessWithGate(t, slog.LevelInfo, gate)
+	sink := harness.sink(t)
+	base := time.Date(2026, 8, 15, 0, 0, 0, 0, time.UTC)
+
+	sink.Sentence(ggaSentence(base, 1, 1))
+	sink.Sentence(ggaSentence(base.Add(time.Second), 2, 1))
+	select {
+	case <-harness.server.publishEntered:
+	case <-time.After(time.Second):
+		t.Fatal("publisher did not receive the first status")
+	}
+	sink.Sentence(ggaSentence(base.Add(2*time.Second), 3, 1))
+	sink.Sentence(ggaSentence(base.Add(3*time.Second), 4, 1))
+	close(gate)
+
+	for index := 0; index < 3; index++ {
+		_ = receiveStatus(t, harness.server.published)
+	}
+	harness.stop(t)
+}
+
 func TestShutdownStopsUDPAndTCP(t *testing.T) {
 	harness := startAppHarness(t, slog.LevelInfo)
 	_ = harness.sink(t)
@@ -232,7 +289,7 @@ func TestTCPStartFailureStopsApp(t *testing.T) {
 	input := newFakeUDPInput()
 	server := newFakeStatusServer()
 	server.runErr = errors.New("listen failed")
-	app := newApp(input, server, observe.NewStats(), slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)), newManualTicker(), time.Now)
+	app := newApp(input, server, observe.NewStats(), slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)), newManualTicker(), newManualDeadlineTimer(), time.Now)
 	if err := app.Run(context.Background()); err == nil || err.Error() != "listen failed" {
 		t.Fatalf("Run error = %v", err)
 	}
@@ -281,7 +338,7 @@ func TestRepeatedWarningsAreRateLimitedWithSuppressedCount(t *testing.T) {
 	ticker := newManualTicker()
 	logs := &bytes.Buffer{}
 	now := time.Date(2026, 8, 15, 0, 0, 0, 0, time.UTC)
-	app := newApp(input, server, observe.NewStats(), slog.New(slog.NewTextHandler(logs, nil)), ticker, func() time.Time { return now })
+	app := newApp(input, server, observe.NewStats(), slog.New(slog.NewTextHandler(logs, nil)), ticker, newManualDeadlineTimer(), func() time.Time { return now })
 	sink := &inputSink{app: app}
 	sink.DatagramRejected(udpinput.RejectNUL)
 	sink.DatagramRejected(udpinput.RejectNUL)
@@ -297,14 +354,15 @@ func TestRepeatedWarningsAreRateLimitedWithSuppressedCount(t *testing.T) {
 }
 
 type appHarness struct {
-	app       *App
-	input     *fakeUDPInput
-	server    *fakeStatusServer
-	ticker    *manualTicker
-	logs      *synchronizedBuffer
-	startedAt time.Time
-	cancel    context.CancelFunc
-	done      chan error
+	app        *App
+	input      *fakeUDPInput
+	server     *fakeStatusServer
+	ticker     *manualTicker
+	flushTimer *manualDeadlineTimer
+	logs       *synchronizedBuffer
+	startedAt  time.Time
+	cancel     context.CancelFunc
+	done       chan error
 }
 
 func startAppHarness(t *testing.T, level slog.Level) *appHarness {
@@ -318,14 +376,15 @@ func startAppHarnessWithGate(t *testing.T, level slog.Level, gate <-chan struct{
 	server := newFakeStatusServer()
 	server.publishGate = gate
 	ticker := newManualTicker()
+	flushTimer := newManualDeadlineTimer()
 	logs := &synchronizedBuffer{}
 	logger := slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: level}))
 	startedAt := time.Date(2026, 8, 15, 0, 0, 0, 0, time.UTC)
-	app := newApp(input, server, observe.NewStats(), logger, ticker, func() time.Time { return startedAt })
+	app := newApp(input, server, observe.NewStats(), logger, ticker, flushTimer, func() time.Time { return startedAt })
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- app.Run(ctx) }()
-	return &appHarness{app: app, input: input, server: server, ticker: ticker, logs: logs, startedAt: startedAt, cancel: cancel, done: done}
+	return &appHarness{app: app, input: input, server: server, ticker: ticker, flushTimer: flushTimer, logs: logs, startedAt: startedAt, cancel: cancel, done: done}
 }
 
 func (h *appHarness) sink(t *testing.T) udpinput.Sink {

@@ -14,6 +14,8 @@ import (
 	"gnssagent/internal/udpinput"
 )
 
+const aggregateFlushDelay = 1500 * time.Millisecond
+
 type UDPInput interface {
 	Run(context.Context, udpinput.Sink) error
 }
@@ -35,22 +37,53 @@ type realTicker struct {
 func (t realTicker) C() <-chan time.Time { return t.ticker.C }
 func (t realTicker) Stop()               { t.ticker.Stop() }
 
+type deadlineTimer interface {
+	C() <-chan time.Time
+	Reset(time.Time)
+	Stop()
+}
+
+type realDeadlineTimer struct {
+	timer *time.Timer
+}
+
+func newRealDeadlineTimer() *realDeadlineTimer {
+	timer := time.NewTimer(time.Hour)
+	timer.Stop()
+	return &realDeadlineTimer{timer: timer}
+}
+
+func (t *realDeadlineTimer) C() <-chan time.Time { return t.timer.C }
+func (t *realDeadlineTimer) Reset(deadline time.Time) {
+	delay := time.Until(deadline)
+	if delay < 0 {
+		delay = 0
+	}
+	t.timer.Reset(delay)
+}
+func (t *realDeadlineTimer) Stop() { t.timer.Stop() }
+
 type warningState struct {
 	last       time.Time
 	suppressed uint64
 }
 
 type App struct {
-	input  UDPInput
-	server StatusServer
-	stats  *observe.Stats
-	logger *slog.Logger
-	ticker intervalTicker
-	clock  func() time.Time
+	input      UDPInput
+	server     StatusServer
+	stats      *observe.Stats
+	logger     *slog.Logger
+	ticker     intervalTicker
+	flushTimer deadlineTimer
+	clock      func() time.Time
 
-	aggregateMu sync.Mutex
-	aggregator  *aggregate.Aggregator
-	publish     chan model.FullStatus
+	aggregateMu   sync.Mutex
+	aggregator    *aggregate.Aggregator
+	flushDeadline time.Time
+
+	publishMu    sync.Mutex
+	publishQueue []model.FullStatus
+	publishWake  chan struct{}
 
 	stateMu         sync.Mutex
 	startedAt       time.Time
@@ -61,10 +94,10 @@ type App struct {
 }
 
 func New(input UDPInput, server StatusServer, stats *observe.Stats, logger *slog.Logger) *App {
-	return newApp(input, server, stats, logger, realTicker{ticker: time.NewTicker(time.Second)}, time.Now)
+	return newApp(input, server, stats, logger, realTicker{ticker: time.NewTicker(time.Second)}, newRealDeadlineTimer(), time.Now)
 }
 
-func newApp(input UDPInput, server StatusServer, stats *observe.Stats, logger *slog.Logger, ticker intervalTicker, clock func() time.Time) *App {
+func newApp(input UDPInput, server StatusServer, stats *observe.Stats, logger *slog.Logger, ticker intervalTicker, flushTimer deadlineTimer, clock func() time.Time) *App {
 	if stats == nil {
 		stats = observe.NewStats()
 	}
@@ -72,16 +105,17 @@ func newApp(input UDPInput, server StatusServer, stats *observe.Stats, logger *s
 		logger = slog.Default()
 	}
 	return &App{
-		input:      input,
-		server:     server,
-		stats:      stats,
-		logger:     logger,
-		ticker:     ticker,
-		clock:      clock,
-		aggregator: aggregate.New(),
-		publish:    make(chan model.FullStatus, 1),
-		startedAt:  clock(),
-		warnings:   make(map[string]warningState),
+		input:       input,
+		server:      server,
+		stats:       stats,
+		logger:      logger,
+		ticker:      ticker,
+		flushTimer:  flushTimer,
+		clock:       clock,
+		aggregator:  aggregate.New(),
+		publishWake: make(chan struct{}, 1),
+		startedAt:   clock(),
+		warnings:    make(map[string]warningState),
 	}
 }
 
@@ -89,6 +123,7 @@ func (a *App) Run(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	defer a.ticker.Stop()
+	defer a.flushTimer.Stop()
 
 	serverDone := make(chan error, 1)
 	inputDone := make(chan error, 1)
@@ -100,6 +135,8 @@ func (a *App) Run(ctx context.Context) error {
 		select {
 		case now := <-a.ticker.C():
 			a.onTick(now)
+		case now := <-a.flushTimer.C():
+			a.onFlushDeadline(now)
 		case err := <-serverDone:
 			serverDone = nil
 			if ctx.Err() != nil {
@@ -141,9 +178,15 @@ func (a *App) waitForComponents(serverDone, inputDone <-chan error) {
 func (a *App) publishLoop(ctx context.Context) {
 	for {
 		select {
-		case status := <-a.publish:
-			a.server.Publish(status)
-			a.stats.RecordPublishedCycle()
+		case <-a.publishWake:
+			for {
+				status, ok := a.nextStatus()
+				if !ok {
+					break
+				}
+				a.server.Publish(status)
+				a.stats.RecordPublishedCycle()
+			}
 		case <-ctx.Done():
 			return
 		}
@@ -151,29 +194,32 @@ func (a *App) publishLoop(ctx context.Context) {
 }
 
 func (a *App) offerStatus(status model.FullStatus) {
+	a.publishMu.Lock()
+	a.publishQueue = append(a.publishQueue, status)
+	a.publishMu.Unlock()
 	select {
-	case a.publish <- status:
-		return
-	default:
-	}
-	select {
-	case <-a.publish:
-	default:
-	}
-	select {
-	case a.publish <- status:
+	case a.publishWake <- struct{}{}:
 	default:
 	}
 }
 
-func (a *App) onTick(now time.Time) {
-	a.aggregateMu.Lock()
-	status, ready := a.aggregator.FlushExpired(now)
-	a.aggregateMu.Unlock()
-	if ready {
-		a.offerStatus(status)
+func (a *App) nextStatus() (model.FullStatus, bool) {
+	a.publishMu.Lock()
+	defer a.publishMu.Unlock()
+	if len(a.publishQueue) == 0 {
+		return model.FullStatus{}, false
 	}
+	status := a.publishQueue[0]
+	if len(a.publishQueue) == 1 {
+		a.publishQueue = nil
+	} else {
+		a.publishQueue[0] = model.FullStatus{}
+		a.publishQueue = a.publishQueue[1:]
+	}
+	return status, true
+}
 
+func (a *App) onTick(now time.Time) {
 	snapshot := a.stats.SnapshotReset()
 	if a.logger.Enabled(context.Background(), slog.LevelDebug) {
 		a.logger.Debug("one-second input summary",
@@ -220,6 +266,20 @@ func (a *App) onTick(now time.Time) {
 	if becameInterrupted {
 		a.logger.Warn("GNSS input interrupted", "silence_seconds", 5)
 	}
+}
+
+func (a *App) onFlushDeadline(now time.Time) {
+	a.aggregateMu.Lock()
+	if a.flushDeadline.IsZero() || now.Before(a.flushDeadline) {
+		a.aggregateMu.Unlock()
+		return
+	}
+	status, ready := a.aggregator.FlushExpired(now)
+	a.flushDeadline = time.Time{}
+	if ready {
+		a.offerStatus(status)
+	}
+	a.aggregateMu.Unlock()
 }
 
 func (a *App) summaryIntervals() int {
@@ -270,16 +330,29 @@ func (s *inputSink) Sentence(sentence nmea.Sentence) {
 	s.app.recoverInput(sentence.ReceivedAt)
 	s.app.aggregateMu.Lock()
 	status, ready := s.app.aggregator.Add(sentence)
-	s.app.aggregateMu.Unlock()
 	if ready {
 		s.app.offerStatus(status)
+		s.app.scheduleFlushLocked(sentence.ReceivedAt)
+	} else if s.app.flushDeadline.IsZero() {
+		s.app.scheduleFlushLocked(sentence.ReceivedAt)
 	}
+	s.app.aggregateMu.Unlock()
 }
 
 func (s *inputSink) Reset() {
 	s.app.aggregateMu.Lock()
 	s.app.aggregator.Clear()
+	s.app.flushDeadline = time.Time{}
+	s.app.flushTimer.Stop()
 	s.app.aggregateMu.Unlock()
+}
+
+func (a *App) scheduleFlushLocked(firstReceivedAt time.Time) {
+	if firstReceivedAt.IsZero() {
+		firstReceivedAt = a.clock()
+	}
+	a.flushDeadline = firstReceivedAt.Add(aggregateFlushDelay)
+	a.flushTimer.Reset(a.flushDeadline)
 }
 
 func (s *inputSink) DatagramRejected(reason udpinput.RejectReason) {
