@@ -313,6 +313,38 @@ func TestServerReturnsListenFailure(t *testing.T) {
 	}
 }
 
+func TestServerObserverReceivesLifecycleEvents(t *testing.T) {
+	listener := newFakeListener()
+	server := newServer("unused", 2, 1, func(string, string) (net.Listener, error) {
+		return listener, nil
+	}, func(net.Conn, []byte) (int, bool) { return 0, false })
+	observer := &recordingObserver{}
+	server.SetObserver(observer)
+	cancel, done := runTestServer(t, server)
+	defer func() {
+		cancel()
+		<-done
+	}()
+
+	active := listener.connect(t, remoteSourceAddr)
+	defer active.Close()
+	writeAll(t, active, protocol.EncodeSubscribeRequest(protocol.StatusFull))
+	assertACK(t, active, protocol.SubscribeSuccess)
+	rejected := listener.connect(t, remoteSourceAddr)
+	defer rejected.Close()
+	if err := rejected.SetReadDeadline(time.Now().Add(time.Second)); err == nil {
+		_, _ = rejected.Read(make([]byte, 1))
+	}
+
+	server.Publish(model.FullStatus{})
+	time.Sleep(10 * time.Millisecond)
+	server.Publish(model.FullStatus{FieldValidityMask: model.FullUsedSatellitesValid, UsedSatellites: 1})
+	server.Publish(model.FullStatus{FieldValidityMask: model.FullUsedSatellitesValid, UsedSatellites: 2})
+	waitObserver(t, observer, func(snapshot observerSnapshot) bool {
+		return snapshot.connections == 2 && snapshot.rejections == 1 && snapshot.subscriptions == 1 && snapshot.replacements >= 1
+	})
+}
+
 func startPipeSession(t *testing.T, subscribeTimeout, writeTimeout time.Duration) (net.Conn, *session, *Hub) {
 	t.Helper()
 	hub := NewHub()
@@ -467,4 +499,58 @@ func runTestServer(t *testing.T, server *Server) (context.CancelFunc, <-chan err
 	done := make(chan error, 1)
 	go func() { done <- server.Run(ctx) }()
 	return cancel, done
+}
+
+type observerSnapshot struct {
+	connections   int
+	rejections    int
+	subscriptions int
+	replacements  int
+}
+
+type recordingObserver struct {
+	mu       sync.Mutex
+	snapshot observerSnapshot
+}
+
+func (o *recordingObserver) RecordTCPConnection() {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.snapshot.connections++
+}
+
+func (o *recordingObserver) RecordTCPRejection() {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.snapshot.rejections++
+}
+
+func (o *recordingObserver) RecordTCPSubscription() {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.snapshot.subscriptions++
+}
+
+func (o *recordingObserver) RecordSlowClientReplacement() {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.snapshot.replacements++
+}
+
+func (o *recordingObserver) current() observerSnapshot {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.snapshot
+}
+
+func waitObserver(t *testing.T, observer *recordingObserver, condition func(observerSnapshot) bool) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if condition(observer.current()) {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("observer condition not met: %+v", observer.current())
 }

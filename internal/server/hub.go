@@ -22,20 +22,22 @@ func newSubscriber(statusType protocol.StatusType) *subscriber {
 	}
 }
 
-func (s *subscriber) offer(frame []byte) {
+func (s *subscriber) offer(frame []byte) bool {
 	select {
 	case <-s.done:
-		return
+		return false
 	default:
 	}
 
 	select {
 	case s.queue <- frame:
-		return
+		return false
 	default:
 	}
+	replaced := false
 	select {
 	case <-s.queue:
+		replaced = true
 	default:
 	}
 	select {
@@ -43,6 +45,7 @@ func (s *subscriber) offer(frame []byte) {
 	case s.queue <- frame:
 	default:
 	}
+	return replaced
 }
 
 func (s *subscriber) close() {
@@ -52,10 +55,17 @@ func (s *subscriber) close() {
 type Hub struct {
 	mu          sync.RWMutex
 	subscribers map[*subscriber]struct{}
+	observer    Observer
 }
 
 func NewHub() *Hub {
 	return &Hub{subscribers: make(map[*subscriber]struct{})}
+}
+
+func (h *Hub) setObserver(observer Observer) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.observer = observer
 }
 
 func (h *Hub) add(subscriber *subscriber) {
@@ -77,6 +87,7 @@ func (h *Hub) Publish(status model.FullStatus) {
 	for subscriber := range h.subscribers {
 		subscribers = append(subscribers, subscriber)
 	}
+	observer := h.observer
 	h.mu.RUnlock()
 	if len(subscribers) == 0 {
 		return
@@ -90,12 +101,16 @@ func (h *Hub) Publish(status model.FullStatus) {
 			if simpleFrame == nil {
 				simpleFrame = protocol.EncodeSimple(status.Simple())
 			}
-			subscriber.offer(simpleFrame)
+			if subscriber.offer(simpleFrame) && observer != nil {
+				observer.RecordSlowClientReplacement()
+			}
 		case protocol.StatusFull:
 			if fullFrame == nil {
 				fullFrame = protocol.EncodeFull(status)
 			}
-			subscriber.offer(fullFrame)
+			if subscriber.offer(fullFrame) && observer != nil {
+				observer.RecordSlowClientReplacement()
+			}
 		}
 	}
 }

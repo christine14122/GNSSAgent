@@ -16,16 +16,29 @@ const rejectionWriteTimeout = 100 * time.Millisecond
 type listenFunc func(network, address string) (net.Listener, error)
 type tryReadFunc func(net.Conn, []byte) (int, bool)
 
+type Observer interface {
+	RecordTCPConnection()
+	RecordTCPRejection()
+	RecordTCPSubscription()
+	RecordSlowClientReplacement()
+}
+
 type Server struct {
-	address string
-	limiter *limiter
-	hub     *Hub
-	listen  listenFunc
-	tryRead tryReadFunc
+	address  string
+	limiter  *limiter
+	hub      *Hub
+	listen   listenFunc
+	tryRead  tryReadFunc
+	observer Observer
 
 	sessionsMu sync.Mutex
 	sessions   map[*session]struct{}
 	wg         sync.WaitGroup
+}
+
+func (s *Server) SetObserver(observer Observer) {
+	s.observer = observer
+	s.hub.setObserver(observer)
 }
 
 func New(address string, maxConnections, maxRemoteConnections int) *Server {
@@ -68,9 +81,15 @@ func (s *Server) Run(ctx context.Context) error {
 			}
 			return err
 		}
+		if s.observer != nil {
+			s.observer.RecordTCPConnection()
+		}
 
 		release, ok := s.limiter.acquire(isLoopbackConnection(conn))
 		if !ok {
+			if s.observer != nil {
+				s.observer.RecordTCPRejection()
+			}
 			s.wg.Add(1)
 			go func() {
 				defer s.wg.Done()
@@ -80,6 +99,7 @@ func (s *Server) Run(ctx context.Context) error {
 		}
 
 		session := newSession(conn, s.hub, defaultSubscriptionTimeout, defaultWriteTimeout)
+		session.observer = s.observer
 		s.sessionsMu.Lock()
 		s.sessions[session] = struct{}{}
 		s.sessionsMu.Unlock()

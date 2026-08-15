@@ -33,13 +33,13 @@ func newManager(address string, factory socketFactory, sleep sleepFunc) *Manager
 	return &Manager{address: address, factory: factory, sleep: sleep}
 }
 
-func (m *Manager) Run(ctx context.Context, sink Sink) {
+func (m *Manager) Run(ctx context.Context, sink Sink) error {
 	retry := newBackoff()
 	for ctx.Err() == nil {
 		socket, err := m.factory.Listen(m.address)
 		if err != nil {
 			if !m.sleep(ctx, retry.Next()) {
-				return
+				return nil
 			}
 			continue
 		}
@@ -47,7 +47,7 @@ func (m *Manager) Run(ctx context.Context, sink Sink) {
 		retry.Reset()
 		if ctx.Err() != nil {
 			_ = socket.Close()
-			return
+			return nil
 		}
 		sink.SocketReady(socket.Info())
 
@@ -58,15 +58,16 @@ func (m *Manager) Run(ctx context.Context, sink Sink) {
 		stopClose()
 		_ = socket.Close()
 		if ctx.Err() != nil {
-			return
+			return nil
 		}
 		if err != nil {
 			sink.Reset()
 		}
 		if !m.sleep(ctx, retry.Next()) {
-			return
+			return nil
 		}
 	}
+	return nil
 }
 
 func consumeSocket(socket packetSocket, sink Sink) error {
@@ -84,6 +85,9 @@ func consumeSocket(socket packetSocket, sink Sink) error {
 		result, err := socket.Read(buffer)
 		if err != nil {
 			return err
+		}
+		if observer, ok := sink.(interface{ DatagramReceived(int) }); ok {
+			observer.DatagramReceived(result.N)
 		}
 
 		if info.DropSource == DropRXQOverflow && result.RXQOverflow != nil {

@@ -127,8 +127,17 @@ type recordingSink struct {
 	parseRejects    int
 	drops           []dropEvent
 	socketInfos     []SocketInfo
+	datagrams       int
+	bytes           int
 	ready           chan struct{}
 	readyOnce       sync.Once
+}
+
+func (s *recordingSink) DatagramReceived(bytes int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.datagrams++
+	s.bytes += bytes
 }
 
 func newRecordingSink() *recordingSink {
@@ -315,6 +324,9 @@ func TestManagerValidatesAndDeliversIndependentDatagrams(t *testing.T) {
 	}
 	if sink.parseRejects != 1 {
 		t.Fatalf("parse rejects = %d, want 1", sink.parseRejects)
+	}
+	if sink.datagrams != 13 || sink.bytes == 0 {
+		t.Fatalf("received datagram accounting = %d/%d", sink.datagrams, sink.bytes)
 	}
 }
 

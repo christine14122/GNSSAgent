@@ -24,6 +24,7 @@ type session struct {
 	subscribed bool
 	statusType protocol.StatusType
 	subscriber *subscriber
+	observer   Observer
 
 	writeMu   sync.Mutex
 	closeOnce sync.Once
@@ -95,6 +96,9 @@ func (s *session) handleSubscribe(frame protocol.Frame) bool {
 	s.hub.add(subscriber)
 	if !s.writeACK(protocol.SubscribeSuccess) {
 		return false
+	}
+	if s.observer != nil {
+		s.observer.RecordTCPSubscription()
 	}
 	if err := s.conn.SetReadDeadline(time.Time{}); err != nil {
 		return false
