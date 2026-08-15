@@ -1,190 +1,170 @@
 package config
 
-import "testing"
+import (
+	"fmt"
+	"reflect"
+	"testing"
+)
 
 func requireError(t *testing.T, err error, want string) {
 	t.Helper()
 	if err == nil {
-		t.Fatalf("expected error %q", want)
+		t.Fatalf("expected error %q, got nil", want)
 	}
 	if err.Error() != want {
-		t.Fatalf("unexpected error: got %q, want %q", err, want)
+		t.Fatalf("error = %q, want %q", err, want)
 	}
 }
 
-func TestParseMultibandDefaults(t *testing.T) {
-	cfg, err := Parse(nil, "multiband-radio")
+func TestParseDefaultsAreTargetIndependent(t *testing.T) {
+	want := Config{
+		UDPListenAddress:     "127.0.0.1:29501",
+		TCPListenAddress:     "0.0.0.0:29501",
+		MaxConnections:       5,
+		MaxRemoteConnections: 4,
+		LogLevel:             "info",
+		LogFile:              "",
+		LogMaxBytes:          8 * 1024 * 1024,
+	}
+
+	for _, target := range []string{
+		"multiband-radio",
+		"ccu",
+		"hf-radio",
+		"unknown-target",
+	} {
+		t.Run(target, func(t *testing.T) {
+			got, err := Parse(nil, target)
+			if err != nil {
+				t.Fatalf("Parse() error = %v", err)
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("Parse() = %#v, want %#v", got, want)
+			}
+		})
+	}
+}
+
+func TestParseUDPListenRequiresNonZeroIPv4Loopback(t *testing.T) {
+	for _, address := range []string{
+		"0.0.0.0:29501",
+		"192.168.7.2:29501",
+		"[::1]:29501",
+		"localhost:29501",
+		"127.0.0.1:0",
+		"bad-address",
+	} {
+		t.Run(address, func(t *testing.T) {
+			_, err := Parse([]string{"--udp-listen", address}, "multiband-radio")
+			requireError(t, err, fmt.Sprintf("udp-listen must be a non-zero IPv4 loopback address: %q", address))
+		})
+	}
+}
+
+func TestParseAcceptsIPv4LoopbackRange(t *testing.T) {
+	got, err := Parse([]string{
+		"--udp-listen", "127.10.20.30:40000",
+		"--tcp-listen", "192.168.7.2:30000",
+	}, "ccu")
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("Parse() error = %v", err)
 	}
-	if cfg.SerialDevice != "/dev/ttyUL4" || cfg.Baud != 9600 {
-		t.Fatalf("unexpected serial defaults: %+v", cfg)
+	if got.UDPListenAddress != "127.10.20.30:40000" {
+		t.Fatalf("UDPListenAddress = %q", got.UDPListenAddress)
 	}
-	if cfg.ListenAddress != "0.0.0.0:29501" {
-		t.Fatalf("unexpected listen address: %s", cfg.ListenAddress)
-	}
-	if cfg.MaxConnections != 5 || cfg.MaxRemoteConnections != 4 {
-		t.Fatalf("unexpected limits: %+v", cfg)
-	}
-	if cfg.LogLevel != "info" {
-		t.Fatalf("unexpected log level: %s", cfg.LogLevel)
+	if got.TCPListenAddress != "192.168.7.2:30000" {
+		t.Fatalf("TCPListenAddress = %q", got.TCPListenAddress)
 	}
 }
 
-func TestParseUnknownTargetRequiresSerial(t *testing.T) {
-	_, err := Parse(nil, "hf")
-	requireError(t, err, "serial device is required for this target")
-}
-
-func TestParseOverridesUnknownTarget(t *testing.T) {
-	cfg, err := Parse([]string{"--serial", "/dev/ttyS2", "--baud", "19200"}, "hf")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.SerialDevice != "/dev/ttyS2" || cfg.Baud != 19200 {
-		t.Fatalf("unexpected config: %+v", cfg)
+func TestSerialFlagsNoLongerExist(t *testing.T) {
+	for _, args := range [][]string{
+		{"--serial", "/dev/ttyUL4"},
+		{"--baud", "9600"},
+	} {
+		if _, err := Parse(args, "multiband-radio"); err == nil {
+			t.Fatalf("Parse(%v) unexpectedly succeeded", args)
+		}
 	}
 }
 
 func TestParseFlagOverrides(t *testing.T) {
-	defaults := Config{
-		SerialDevice:         "/dev/ttyUL4",
-		Baud:                 9600,
-		ListenAddress:        "0.0.0.0:29501",
-		MaxConnections:       5,
-		MaxRemoteConnections: 4,
-		LogLevel:             "info",
+	got, err := Parse([]string{
+		"--udp-listen", "127.0.0.2:31001",
+		"--tcp-listen", "127.0.0.1:31002",
+		"--max-connections", "7",
+		"--max-remote-connections", "3",
+		"--log-level", "debug",
+		"--log-file", "/tmp/gnssagent.log",
+		"--log-max-bytes", "4096",
+	}, "hf-radio")
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
 	}
 
-	serial := defaults
-	serial.SerialDevice = "/dev/ttyS2"
-	baud := defaults
-	baud.Baud = 19200
-	listen := defaults
-	listen.ListenAddress = "127.0.0.1:12345"
-	maxConnections := defaults
-	maxConnections.MaxConnections = 6
-	maxRemoteConnections := defaults
-	maxRemoteConnections.MaxRemoteConnections = 3
-	logLevel := defaults
-	logLevel.LogLevel = "debug"
-
-	tests := []struct {
-		name   string
-		args   []string
-		target string
-		want   Config
-	}{
-		{name: "serial", args: []string{"--serial", "/dev/ttyS2"}, target: "hf", want: serial},
-		{name: "baud", args: []string{"--baud", "19200"}, target: "multiband-radio", want: baud},
-		{name: "listen", args: []string{"--listen", "127.0.0.1:12345"}, target: "multiband-radio", want: listen},
-		{name: "max total", args: []string{"--max-connections", "6"}, target: "multiband-radio", want: maxConnections},
-		{name: "max remote", args: []string{"--max-remote-connections", "3"}, target: "multiband-radio", want: maxRemoteConnections},
-		{name: "log level", args: []string{"--log-level", "debug"}, target: "multiband-radio", want: logLevel},
+	want := Config{
+		UDPListenAddress:     "127.0.0.2:31001",
+		TCPListenAddress:     "127.0.0.1:31002",
+		MaxConnections:       7,
+		MaxRemoteConnections: 3,
+		LogLevel:             "debug",
+		LogFile:              "/tmp/gnssagent.log",
+		LogMaxBytes:          4096,
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cfg, err := Parse(tt.args, tt.target)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if cfg != tt.want {
-				t.Fatalf("unexpected config: got %+v, want %+v", cfg, tt.want)
-			}
-		})
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Parse() = %#v, want %#v", got, want)
 	}
 }
 
 func TestParseRejectsPositionalArguments(t *testing.T) {
 	tests := []struct {
-		name    string
-		args    []string
-		wantErr string
+		name string
+		args []string
+		want string
 	}{
-		{
-			name:    "before flags retains ignored flags in error",
-			args:    []string{"typo", "--baud", "19200"},
-			wantErr: "unexpected positional arguments: [typo --baud 19200]",
-		},
-		{
-			name:    "after valid flags",
-			args:    []string{"--baud", "19200", "typo"},
-			wantErr: "unexpected positional arguments: [typo]",
-		},
+		{name: "single", args: []string{"extra"}, want: `unexpected positional arguments: ["extra"]`},
+		{name: "after flag", args: []string{"--log-level", "debug", "extra"}, want: `unexpected positional arguments: ["extra"]`},
+		{name: "multiple", args: []string{"one", "two"}, want: `unexpected positional arguments: ["one" "two"]`},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := Parse(tt.args, "multiband-radio")
-			requireError(t, err, tt.wantErr)
+			requireError(t, err, tt.want)
 		})
 	}
 }
 
-func TestParseRejectsInvalidValues(t *testing.T) {
-	tests := []struct {
-		name    string
-		args    []string
-		wantErr string
-	}{
-		{name: "zero baud", args: []string{"--baud", "0"}, wantErr: "baud must be positive: 0"},
-		{name: "negative baud", args: []string{"--baud", "-1"}, wantErr: "baud must be positive: -1"},
-		{name: "zero max total", args: []string{"--max-connections", "0"}, wantErr: "max-connections must be positive"},
-		{name: "negative max remote", args: []string{"--max-remote-connections", "-1"}, wantErr: "max-remote-connections must be non-negative"},
-		{name: "max remote equals total", args: []string{"--max-connections", "5", "--max-remote-connections", "5"}, wantErr: "max-remote-connections must leave at least one loopback slot"},
-		{name: "max remote exceeds total", args: []string{"--max-connections", "5", "--max-remote-connections", "6"}, wantErr: "max-remote-connections must leave at least one loopback slot"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			_, err := Parse(tt.args, "multiband-radio")
-			requireError(t, err, tt.wantErr)
-		})
-	}
-}
-
-func TestParseAcceptsBoundaryValues(t *testing.T) {
+func TestParseRejectsInvalidLimits(t *testing.T) {
 	tests := []struct {
 		name string
 		args []string
-		want Config
+		want string
 	}{
-		{
-			name: "minimum positive baud and total with zero remote",
-			args: []string{"--baud", "1", "--max-connections", "1", "--max-remote-connections", "0"},
-			want: Config{
-				SerialDevice:         "/dev/ttyUL4",
-				Baud:                 1,
-				ListenAddress:        "0.0.0.0:29501",
-				MaxConnections:       1,
-				MaxRemoteConnections: 0,
-				LogLevel:             "info",
-			},
-		},
-		{
-			name: "remote one below total",
-			args: []string{"--max-connections", "2", "--max-remote-connections", "1"},
-			want: Config{
-				SerialDevice:         "/dev/ttyUL4",
-				Baud:                 9600,
-				ListenAddress:        "0.0.0.0:29501",
-				MaxConnections:       2,
-				MaxRemoteConnections: 1,
-				LogLevel:             "info",
-			},
-		},
+		{name: "zero total", args: []string{"--max-connections", "0"}, want: "max-connections must be greater than zero"},
+		{name: "negative total", args: []string{"--max-connections", "-1"}, want: "max-connections must be greater than zero"},
+		{name: "negative remote", args: []string{"--max-remote-connections", "-1"}, want: "max-remote-connections must be non-negative and less than max-connections"},
+		{name: "remote equals total", args: []string{"--max-connections", "5", "--max-remote-connections", "5"}, want: "max-remote-connections must be non-negative and less than max-connections"},
+		{name: "remote exceeds total", args: []string{"--max-connections", "5", "--max-remote-connections", "6"}, want: "max-remote-connections must be non-negative and less than max-connections"},
+		{name: "zero log max", args: []string{"--log-max-bytes", "0"}, want: "log-max-bytes must be greater than zero"},
+		{name: "negative log max", args: []string{"--log-max-bytes", "-1"}, want: "log-max-bytes must be greater than zero"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg, err := Parse(tt.args, "multiband-radio")
-			if err != nil {
-				t.Fatal(err)
-			}
-			if cfg != tt.want {
-				t.Fatalf("unexpected config: got %+v, want %+v", cfg, tt.want)
-			}
+			_, err := Parse(tt.args, "multiband-radio")
+			requireError(t, err, tt.want)
 		})
+	}
+}
+
+func TestParseAcceptsBoundaryConnectionLimits(t *testing.T) {
+	for _, args := range [][]string{
+		{"--max-connections", "1", "--max-remote-connections", "0"},
+		{"--max-connections", "2", "--max-remote-connections", "1"},
+	} {
+		if _, err := Parse(args, "unknown-target"); err != nil {
+			t.Fatalf("Parse(%v) error = %v", args, err)
+		}
 	}
 }

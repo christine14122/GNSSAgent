@@ -1,59 +1,65 @@
 package config
 
 import (
-	"errors"
 	"flag"
 	"fmt"
+	"io"
+	"net/netip"
 )
 
+const defaultLogMaxBytes int64 = 8 * 1024 * 1024
+
 type Config struct {
-	SerialDevice         string
-	Baud                 int
-	ListenAddress        string
+	UDPListenAddress     string
+	TCPListenAddress     string
 	MaxConnections       int
 	MaxRemoteConnections int
 	LogLevel             string
+	LogFile              string
+	LogMaxBytes          int64
 }
 
 func Parse(args []string, target string) (Config, error) {
+	_ = target
+
 	cfg := Config{
-		Baud:                 9600,
-		ListenAddress:        "0.0.0.0:29501",
+		UDPListenAddress:     "127.0.0.1:29501",
+		TCPListenAddress:     "0.0.0.0:29501",
 		MaxConnections:       5,
 		MaxRemoteConnections: 4,
 		LogLevel:             "info",
-	}
-	if target == "multiband-radio" {
-		cfg.SerialDevice = "/dev/ttyUL4"
+		LogMaxBytes:          defaultLogMaxBytes,
 	}
 
 	fs := flag.NewFlagSet("gnssagent", flag.ContinueOnError)
-	fs.StringVar(&cfg.SerialDevice, "serial", cfg.SerialDevice, "GNSS UART device")
-	fs.IntVar(&cfg.Baud, "baud", cfg.Baud, "GNSS UART baud")
-	fs.StringVar(&cfg.ListenAddress, "listen", cfg.ListenAddress, "TCP listen address")
+	fs.SetOutput(io.Discard)
+	fs.StringVar(&cfg.UDPListenAddress, "udp-listen", cfg.UDPListenAddress, "IPv4 loopback UDP address for raw NMEA input")
+	fs.StringVar(&cfg.TCPListenAddress, "tcp-listen", cfg.TCPListenAddress, "TCP address for GNSS status subscribers")
 	fs.IntVar(&cfg.MaxConnections, "max-connections", cfg.MaxConnections, "maximum total TCP connections")
 	fs.IntVar(&cfg.MaxRemoteConnections, "max-remote-connections", cfg.MaxRemoteConnections, "maximum non-loopback TCP connections")
-	fs.StringVar(&cfg.LogLevel, "log-level", cfg.LogLevel, "debug, info, warn, or error")
+	fs.StringVar(&cfg.LogLevel, "log-level", cfg.LogLevel, "log level")
+	fs.StringVar(&cfg.LogFile, "log-file", cfg.LogFile, "rotating log file; empty writes to stderr")
+	fs.Int64Var(&cfg.LogMaxBytes, "log-max-bytes", cfg.LogMaxBytes, "maximum active log size before rotation")
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err
 	}
 	if fs.NArg() != 0 {
-		return Config{}, fmt.Errorf("unexpected positional arguments: %v", fs.Args())
+		return Config{}, fmt.Errorf("unexpected positional arguments: %q", fs.Args())
 	}
-	if cfg.SerialDevice == "" {
-		return Config{}, errors.New("serial device is required for this target")
+
+	udpAddress, err := netip.ParseAddrPort(cfg.UDPListenAddress)
+	if err != nil || !udpAddress.Addr().Is4() || !udpAddress.Addr().IsLoopback() || udpAddress.Port() == 0 {
+		return Config{}, fmt.Errorf("udp-listen must be a non-zero IPv4 loopback address: %q", cfg.UDPListenAddress)
 	}
-	if cfg.Baud <= 0 {
-		return Config{}, fmt.Errorf("baud must be positive: %d", cfg.Baud)
+	if cfg.MaxConnections <= 0 {
+		return Config{}, fmt.Errorf("max-connections must be greater than zero")
 	}
-	if cfg.MaxConnections < 1 {
-		return Config{}, errors.New("max-connections must be positive")
+	if cfg.MaxRemoteConnections < 0 || cfg.MaxRemoteConnections >= cfg.MaxConnections {
+		return Config{}, fmt.Errorf("max-remote-connections must be non-negative and less than max-connections")
 	}
-	if cfg.MaxRemoteConnections < 0 {
-		return Config{}, errors.New("max-remote-connections must be non-negative")
+	if cfg.LogMaxBytes <= 0 {
+		return Config{}, fmt.Errorf("log-max-bytes must be greater than zero")
 	}
-	if cfg.MaxRemoteConnections >= cfg.MaxConnections {
-		return Config{}, errors.New("max-remote-connections must leave at least one loopback slot")
-	}
+
 	return cfg, nil
 }
