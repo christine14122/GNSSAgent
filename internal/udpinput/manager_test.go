@@ -127,6 +127,7 @@ type recordingSink struct {
 	parseRejects    int
 	drops           []dropEvent
 	socketInfos     []SocketInfo
+	events          []InputEvent
 	datagrams       int
 	bytes           int
 	ready           chan struct{}
@@ -181,11 +182,16 @@ func (s *recordingSink) KernelDrops(delta uint64, source DropSource) {
 	s.drops = append(s.drops, dropEvent{delta: delta, source: source})
 }
 
-func (s *recordingSink) SocketReady(info SocketInfo) {
+func (s *recordingSink) InputEvent(event InputEvent) {
 	s.mu.Lock()
-	s.socketInfos = append(s.socketInfos, info)
+	s.events = append(s.events, event)
+	if event.Kind == InputSocketReady {
+		s.socketInfos = append(s.socketInfos, event.SocketInfo)
+	}
 	s.mu.Unlock()
-	s.readyOnce.Do(func() { close(s.ready) })
+	if event.Kind == InputSocketReady {
+		s.readyOnce.Do(func() { close(s.ready) })
+	}
 }
 
 func TestManagerRetriesBindWithFixedBackoff(t *testing.T) {
@@ -205,11 +211,20 @@ func TestManagerRetriesBindWithFixedBackoff(t *testing.T) {
 		}
 		return true
 	})
-	manager.Run(ctx, newRecordingSink())
+	sink := newRecordingSink()
+	manager.Run(ctx, sink)
 
 	want := []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, 16 * time.Second, 30 * time.Second, 30 * time.Second}
 	if !reflect.DeepEqual(sleeps, want) {
 		t.Fatalf("sleeps = %v, want %v", sleeps, want)
+	}
+	if len(sink.events) != len(want) {
+		t.Fatalf("input events = %d, want %d", len(sink.events), len(want))
+	}
+	for index, event := range sink.events {
+		if event.Kind != InputBindFailed || event.Err == nil || event.RetryIn != want[index] {
+			t.Fatalf("event %d = %+v", index, event)
+		}
 	}
 }
 
@@ -243,6 +258,21 @@ func TestManagerSuccessfulBindResetsBackoffAndReadErrorRebinds(t *testing.T) {
 	if socket.closeCount == 0 {
 		t.Fatal("socket was not closed after fatal read error")
 	}
+	if len(sink.events) != 4 {
+		t.Fatalf("events = %#v", sink.events)
+	}
+	if sink.events[0].Kind != InputBindFailed || sink.events[0].RetryIn != time.Second {
+		t.Fatalf("first bind event = %+v", sink.events[0])
+	}
+	if sink.events[1].Kind != InputSocketReady || !sink.events[1].Recovered {
+		t.Fatalf("ready recovery event = %+v", sink.events[1])
+	}
+	if sink.events[2].Kind != InputReadFailed || sink.events[2].Err != errRead || sink.events[2].RetryIn != time.Second {
+		t.Fatalf("read event = %+v", sink.events[2])
+	}
+	if sink.events[3].Kind != InputBindFailed || sink.events[3].RetryIn != 2*time.Second {
+		t.Fatalf("second bind event = %+v", sink.events[3])
+	}
 }
 
 func TestManagerCancellationClosesCurrentSocket(t *testing.T) {
@@ -273,6 +303,9 @@ func TestManagerCancellationClosesCurrentSocket(t *testing.T) {
 	}
 	if sink.resets != 0 {
 		t.Fatalf("context cancellation caused %d resets", sink.resets)
+	}
+	if len(sink.events) != 1 || sink.events[0].Kind != InputSocketReady || sink.events[0].Recovered {
+		t.Fatalf("initial socket event = %#v", sink.events)
 	}
 }
 

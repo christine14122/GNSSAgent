@@ -39,13 +39,16 @@ func (systemSocketFactory) Listen(address string) (packetSocket, error) {
 	}
 
 	info := SocketInfo{RequestedReadBuffer: ReadBufferSize}
+	var kernelReadBuffer int
 	var inode uint64
 	var socketErr error
 	err = rawConn.Control(func(fd uintptr) {
-		info.ActualReadBuffer, socketErr = unix.GetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_RCVBUF)
+		kernelReadBuffer, socketErr = unix.GetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_RCVBUF)
 		if socketErr != nil {
 			return
 		}
+		info.KernelReadBuffer = kernelReadBuffer
+		info.ActualReadBuffer = kernelReadBuffer / 2
 
 		var stat unix.Stat_t
 		if err := unix.Fstat(int(fd), &stat); err == nil {

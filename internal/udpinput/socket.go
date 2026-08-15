@@ -16,6 +16,7 @@ const (
 type SocketInfo struct {
 	RequestedReadBuffer int
 	ActualReadBuffer    int
+	KernelReadBuffer    int
 	DropSource          DropSource
 }
 

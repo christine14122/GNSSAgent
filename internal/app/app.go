@@ -374,11 +374,17 @@ func (s *inputSink) KernelDrops(delta uint64, source udpinput.DropSource) {
 	s.app.warnRateLimited("kernel-drops", "UDP receive queue dropped datagrams", "delta", delta, "source", source)
 }
 
-func (s *inputSink) SocketReady(info udpinput.SocketInfo) {
+func (s *inputSink) InputEvent(event udpinput.InputEvent) {
+	if event.Kind != udpinput.InputSocketReady {
+		return
+	}
+	info := event.SocketInfo
 	s.app.logger.Info("UDP input socket ready",
 		"requested_rcvbuf", info.RequestedReadBuffer,
 		"actual_rcvbuf", info.ActualReadBuffer,
-		"drop_source", info.DropSource)
+		"kernel_rcvbuf", info.KernelReadBuffer,
+		"drop_source", info.DropSource,
+		"recovered", event.Recovered)
 	if info.ActualReadBuffer > 0 && info.ActualReadBuffer < info.RequestedReadBuffer {
 		s.app.warnRateLimited("small-rcvbuf", "UDP receive buffer below requested size",
 			"requested", info.RequestedReadBuffer, "actual", info.ActualReadBuffer)

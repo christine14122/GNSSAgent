@@ -11,10 +11,27 @@ import (
 type Sink interface {
 	Sentence(nmea.Sentence)
 	Reset()
+	DatagramReceived(bytes int)
 	DatagramRejected(RejectReason)
 	NMEARejected(checksum bool)
 	KernelDrops(delta uint64, source DropSource)
-	SocketReady(SocketInfo)
+	InputEvent(InputEvent)
+}
+
+type InputEventKind uint8
+
+const (
+	InputBindFailed InputEventKind = iota + 1
+	InputReadFailed
+	InputSocketReady
+)
+
+type InputEvent struct {
+	Kind       InputEventKind
+	Err        error
+	RetryIn    time.Duration
+	SocketInfo SocketInfo
+	Recovered  bool
 }
 
 type sleepFunc func(context.Context, time.Duration) bool
@@ -35,21 +52,26 @@ func newManager(address string, factory socketFactory, sleep sleepFunc) *Manager
 
 func (m *Manager) Run(ctx context.Context, sink Sink) error {
 	retry := newBackoff()
+	recovering := false
 	for ctx.Err() == nil {
 		socket, err := m.factory.Listen(m.address)
 		if err != nil {
-			if !m.sleep(ctx, retry.Next()) {
+			delay := retry.Next()
+			sink.InputEvent(InputEvent{Kind: InputBindFailed, Err: err, RetryIn: delay})
+			recovering = true
+			if !m.sleep(ctx, delay) {
 				return nil
 			}
 			continue
 		}
 
-		retry.Reset()
 		if ctx.Err() != nil {
 			_ = socket.Close()
 			return nil
 		}
-		sink.SocketReady(socket.Info())
+		retry.Reset()
+		sink.InputEvent(InputEvent{Kind: InputSocketReady, SocketInfo: socket.Info(), Recovered: recovering})
+		recovering = false
 
 		stopClose := context.AfterFunc(ctx, func() {
 			_ = socket.Close()
@@ -62,9 +84,13 @@ func (m *Manager) Run(ctx context.Context, sink Sink) error {
 		}
 		if err != nil {
 			sink.Reset()
-		}
-		if !m.sleep(ctx, retry.Next()) {
-			return nil
+			delay := retry.Next()
+			sink.InputEvent(InputEvent{Kind: InputReadFailed, Err: err, RetryIn: delay})
+			recovering = true
+			if !m.sleep(ctx, delay) {
+				return nil
+			}
+			continue
 		}
 	}
 	return nil
@@ -86,9 +112,7 @@ func consumeSocket(socket packetSocket, sink Sink) error {
 		if err != nil {
 			return err
 		}
-		if observer, ok := sink.(interface{ DatagramReceived(int) }); ok {
-			observer.DatagramReceived(result.N)
-		}
+		sink.DatagramReceived(result.N)
 
 		if info.DropSource == DropRXQOverflow && result.RXQOverflow != nil {
 			current := *result.RXQOverflow
