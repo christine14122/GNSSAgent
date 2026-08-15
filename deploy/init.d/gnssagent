@@ -16,22 +16,110 @@ fi
 : "${LOG_MAX_BYTES:=8388608}"
 : "${CONSOLE_LOG:=/var/volatile/gnssagent-console.log}"
 
-read_live_pid() {
-    [ -r "$PIDFILE" ] || return 1
-    pid=$(sed -n '1p' "$PIDFILE" 2>/dev/null)
+SCRIPT_PATH=$0
+SUPERVISOR_TOKEN=__gnssagent_supervise__
+CHILD_PIDFILE=${PIDFILE}.child
+
+read_pidfile() {
+    pidfile=$1
+    [ -r "$pidfile" ] || return 1
+    pid=$(sed -n '1p' "$pidfile" 2>/dev/null)
     case "$pid" in
         ''|*[!0-9]*) return 1 ;;
     esac
     [ "$pid" -gt 1 ] 2>/dev/null || return 1
-    kill -0 "$pid" 2>/dev/null || return 1
     return 0
 }
 
+is_supervisor_pid() {
+    check_pid=$1
+    kill -0 "$check_pid" 2>/dev/null || return 1
+    [ -r "/proc/$check_pid/cmdline" ] || return 1
+    command_line=$(tr '\000' ' ' <"/proc/$check_pid/cmdline" 2>/dev/null) || return 1
+    case "$command_line" in
+        *"$SCRIPT_PATH $SUPERVISOR_TOKEN"*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+read_live_supervisor() {
+    read_pidfile "$PIDFILE" || return 1
+    kill -0 "$pid" 2>/dev/null || return 1
+    is_supervisor_pid "$pid"
+}
+
+supervise() {
+    mkdir -p "$(dirname "$LOG_FILE")" || exit 1
+    mkdir -p "$(dirname "$CONSOLE_LOG")" || exit 1
+    if [ -f "$CONSOLE_LOG" ]; then
+        mv "$CONSOLE_LOG" "$CONSOLE_LOG.1" || exit 1
+    fi
+    exec 3>"$CONSOLE_LOG" || exit 1
+
+    child_pid=''
+    stopping=0
+    backoff_seconds=1
+
+    stop_child() {
+        stopping=1
+        if [ -n "$child_pid" ] && kill -0 "$child_pid" 2>/dev/null; then
+            kill -TERM "$child_pid" 2>/dev/null || true
+        fi
+    }
+    cleanup_supervisor() {
+        if [ -n "$child_pid" ] && kill -0 "$child_pid" 2>/dev/null; then
+            kill -TERM "$child_pid" 2>/dev/null || true
+            wait "$child_pid" 2>/dev/null || true
+        fi
+        rm -f "$CHILD_PIDFILE"
+    }
+    trap stop_child HUP INT TERM
+    trap cleanup_supervisor EXIT
+
+    while [ "$stopping" -eq 0 ]; do
+        set -- "$GNSSAGENT_BIN" \
+            --udp-listen "$UDP_LISTEN" \
+            --tcp-listen "$TCP_LISTEN" \
+            --max-connections "$MAX_CONNECTIONS" \
+            --max-remote-connections "$MAX_REMOTE_CONNECTIONS" \
+            --log-level "$LOG_LEVEL" \
+            --log-file "$LOG_FILE" \
+            --log-max-bytes "$LOG_MAX_BYTES"
+        started_at=$(date +%s)
+        "$@" >&3 2>&1 </dev/null &
+        child_pid=$!
+        printf '%s\n' "$child_pid" >"$CHILD_PIDFILE"
+        wait "$child_pid"
+        exit_code=$?
+        finished_at=$(date +%s)
+        runtime_seconds=$((finished_at - started_at))
+        child_pid=''
+        rm -f "$CHILD_PIDFILE"
+
+        if [ "$stopping" -ne 0 ]; then
+            break
+        fi
+        if [ "$runtime_seconds" -ge 60 ]; then
+            backoff_seconds=1
+        fi
+        printf '%s supervisor: GNSSAgent exited code=%s runtime_seconds=%s retry_in_seconds=%s\n' \
+            "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$exit_code" "$runtime_seconds" "$backoff_seconds" >&3
+        sleep "$backoff_seconds"
+        if [ "$backoff_seconds" -lt 30 ]; then
+            backoff_seconds=$((backoff_seconds * 2))
+            if [ "$backoff_seconds" -gt 30 ]; then
+                backoff_seconds=30
+            fi
+        fi
+    done
+}
+
 do_start() {
-    if read_live_pid; then
+    if read_live_supervisor; then
         echo "GNSSAgent is already running (pid $pid)"
         return 0
     fi
+    rm -f "$PIDFILE"
     if [ ! -x "$GNSSAGENT_BIN" ]; then
         echo "GNSSAgent executable is missing or not executable: $GNSSAGENT_BIN" >&2
         return 1
@@ -39,53 +127,58 @@ do_start() {
 
     mkdir -p "$(dirname "$LOG_FILE")"
     mkdir -p "$(dirname "$CONSOLE_LOG")"
-    set -- "$GNSSAGENT_BIN" \
-        --udp-listen "$UDP_LISTEN" \
-        --tcp-listen "$TCP_LISTEN" \
-        --max-connections "$MAX_CONNECTIONS" \
-        --max-remote-connections "$MAX_REMOTE_CONNECTIONS" \
-        --log-level "$LOG_LEVEL" \
-        --log-file "$LOG_FILE" \
-        --log-max-bytes "$LOG_MAX_BYTES"
-    nohup "$@" >"$CONSOLE_LOG" 2>&1 </dev/null &
+    nohup /bin/sh "$SCRIPT_PATH" "$SUPERVISOR_TOKEN" </dev/null >/dev/null 2>&1 &
     echo "$!" >"$PIDFILE"
-    echo "GNSSAgent started (pid $!)"
+    sleep 1
+    if ! read_live_supervisor; then
+        rm -f "$PIDFILE"
+        echo "GNSSAgent supervisor failed to start; see $CONSOLE_LOG" >&2
+        return 1
+    fi
+    echo "GNSSAgent supervisor started (pid $pid)"
 }
 
 do_stop() {
-    if ! read_live_pid; then
+    if ! read_pidfile "$PIDFILE"; then
         rm -f "$PIDFILE"
         echo "GNSSAgent is not running"
         return 0
     fi
 
     target_pid=$pid
+    if ! is_supervisor_pid "$target_pid"; then
+        rm -f "$PIDFILE"
+        echo "GNSSAgent PID file was stale; process $target_pid was not signaled" >&2
+        return 0
+    fi
     if ! kill -TERM "$target_pid" 2>/dev/null; then
-        echo "Unable to signal GNSSAgent pid $target_pid" >&2
+        echo "Unable to signal GNSSAgent supervisor pid $target_pid" >&2
         return 1
     fi
     for wait_seconds in 1 2 3 4 5; do
-        if ! kill -0 "$target_pid" 2>/dev/null; then
+        if ! is_supervisor_pid "$target_pid"; then
             rm -f "$PIDFILE"
-            echo "GNSSAgent stopped"
+            rm -f "$CHILD_PIDFILE"
+            echo "GNSSAgent supervisor stopped"
             return 0
         fi
         sleep 1
     done
-    echo "GNSSAgent pid $target_pid did not stop within 5 seconds" >&2
+    echo "GNSSAgent supervisor pid $target_pid did not stop within 5 seconds" >&2
     return 1
 }
 
 do_status() {
-    if read_live_pid; then
-        echo "GNSSAgent is running (pid $pid)"
+    if read_live_supervisor; then
+        echo "GNSSAgent supervisor is running (pid $pid)"
         return 0
     fi
-    echo "GNSSAgent is not running"
+    echo "GNSSAgent supervisor is not running"
     return 3
 }
 
 case "${1:-}" in
+    "$SUPERVISOR_TOKEN") supervise ;;
     start) do_start ;;
     stop) do_stop ;;
     restart)

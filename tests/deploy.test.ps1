@@ -61,14 +61,25 @@ foreach ($text in @(
     '--log-level "$LOG_LEVEL"',
     '--log-file "$LOG_FILE"',
     '--log-max-bytes "$LOG_MAX_BYTES"',
-    'nohup "$@" >"$CONSOLE_LOG" 2>&1 </dev/null &'
+    '__gnssagent_supervise__',
+    'nohup /bin/sh "$SCRIPT_PATH" "$SUPERVISOR_TOKEN"',
+    'exec 3>"$CONSOLE_LOG"',
+    '/proc/$check_pid/cmdline',
+    'kill -TERM "$child_pid"',
+    'sleep "$backoff_seconds"'
 )) {
     if (-not $init.Contains($text)) {
         throw "Init script is missing: $text"
     }
 }
-if ($init.Contains('>>"$CONSOLE_LOG"') -or $init.Contains('start-stop-daemon')) {
-    throw "Init script must overwrite console output and must not require start-stop-daemon"
+if ($init.Contains('nohup "$@" >"$CONSOLE_LOG"') -or $init.Contains('start-stop-daemon')) {
+    throw "Init script must use its supervisor and must not require start-stop-daemon"
+}
+if (([regex]::Matches($init, 'exec 3>"\$CONSOLE_LOG"')).Count -ne 1) {
+    throw "The supervisor must open CONSOLE_LOG exactly once per service start"
+}
+if (-not $init.Contains('mv "$CONSOLE_LOG" "$CONSOLE_LOG.1"')) {
+    throw "The previous supervisor console log must be retained as one fixed backup"
 }
 
 foreach ($text in @('netstat -lun', 'netstat -lnt', 'ss -lun', 'ss -lnt', 'LOG_MAX_BYTES + 4096')) {
