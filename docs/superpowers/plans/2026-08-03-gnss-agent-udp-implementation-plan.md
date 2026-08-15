@@ -723,7 +723,7 @@ Expected: all session, limit, latest-value, timeout, and silent-`0x10` tests pas
 - slow-client replacements;
 - last checksum-valid supported NMEA time.
 
-Tests must update counters concurrently and run with `go test -race` when a CGO-enabled host is available. Do not add UART bytes, baud occupancy, overrun/frame/parity, or ICount fields.
+Tests must update counters concurrently and run with `go test -race` on both the prepared Windows MinGW-w64 host and the prepared WSL/Linux Go 1.25.5 + GCC environment. Do not add UART bytes, baud occupancy, overrun/frame/parity, or ICount fields.
 
 The app takes an atomic one-second snapshot/reset for measurement, optionally emits that snapshot at debug level, and adds it to a separate 60-second accumulator for the info summary. Tests must prove that accumulating 60 snapshots preserves every counter and talker/kind bucket without relying on a fixed expected NMEA count.
 
@@ -971,9 +971,9 @@ CONSOLE_LOG=/var/volatile/gnssagent-console.log
 
 `/var/log` on MMR200 resolves into volatile storage, so the structured `LOG_FILE` must remain under the persistent `/lib/firmware` filesystem. The test must reject `/var/log`, `/var/volatile`, an empty `LOG_FILE`, or a non-positive `LOG_MAX_BYTES`; assert that the implementation has a fixed single `.1` backup and no configurable/unbounded backup count; and assert that the init script creates the parent directory and passes `LOG_FILE`/`LOG_MAX_BYTES` to GNSSAgent instead of using unbounded shell append.
 
-`CONSOLE_LOG` captures only pre-logger startup errors and unexpected raw stderr. It is intentionally volatile and overwritten, not appended, on every start; periodic `slog` output goes only through the process-owned rotating file. Foreground runs with an empty `--log-file` still use stderr, while the production init configuration selects the bounded persistent sink.
+`CONSOLE_LOG` captures only pre-logger startup errors, supervisor diagnostics, and unexpected raw stderr. The supervisor opens it exactly once per service start; child retries inherit that descriptor and must not truncate prior retry evidence. A new supervisor start moves the previous file to one fixed `.1` backup before opening the active file. Periodic `slog` output goes only through the process-owned rotating file. Foreground runs with an empty `--log-file` still use stderr, while the production init configuration selects the bounded persistent sink.
 
-Assert init/smoke scripts contain no `/dev/tty`, `ttyUL`, baud, termios, `TIOC`, `CFGSYS`, `CFGSAVE`, GPIO, link budget, or UART capture command. Also assert that deployment does not require `start-stop-daemon`, that the start line uses `>` rather than `>>` for `CONSOLE_LOG`, and that the smoke script contains both `netstat -lun` and `netstat -lnt` fallbacks.
+Assert init/smoke scripts contain no `/dev/tty`, `ttyUL`, baud, termios, `TIOC`, `CFGSYS`, `CFGSAVE`, GPIO, link budget, or UART capture command. Also assert that deployment does not require `start-stop-daemon`; the supervisor opens `CONSOLE_LOG` exactly once, retains one `.1` backup, identifies its PID through `/proc/<pid>/cmdline`, and retries children with the 1, 2, 4, 8, 16, 30 second backoff. The smoke script must contain both `netstat -lun` and `netstat -lnt` fallbacks.
 
 - [ ] **Step 2: Implement the SysV init script**
 
@@ -989,24 +989,20 @@ The start command passes only:
 --log-max-bytes "$LOG_MAX_BYTES"
 ```
 
-The portable, mandatory start path is the shell pattern already used by the target-family CPDC deployment:
+The portable, mandatory start path is a repository-owned shell supervisor because the measured MMR200 image has neither `start-stop-daemon` nor another suitable service supervisor. `start` launches the init script's private `__gnssagent_supervise__` action and records the supervisor PID. The supervisor:
 
 ```sh
 mkdir -p "$(dirname "$LOG_FILE")"
 mkdir -p "$(dirname "$CONSOLE_LOG")"
-set -- "$GNSSAGENT_BIN" \
-    --udp-listen "$UDP_LISTEN" \
-    --tcp-listen "$TCP_LISTEN" \
-    --max-connections "$MAX_CONNECTIONS" \
-    --max-remote-connections "$MAX_REMOTE_CONNECTIONS" \
-    --log-level "$LOG_LEVEL" \
-    --log-file "$LOG_FILE" \
-    --log-max-bytes "$LOG_MAX_BYTES"
-nohup "$@" >"$CONSOLE_LOG" 2>&1 </dev/null &
-echo "$!" >"$PIDFILE"
+if [ -f "$CONSOLE_LOG" ]; then
+    mv "$CONSOLE_LOG" "$CONSOLE_LOG.1"
+fi
+exec 3>"$CONSOLE_LOG"
+# Each child inherits fd 3. A failed child is restarted with bounded backoff;
+# fd 3 is not reopened or truncated between child attempts.
 ```
 
-Do not call or require `start-stop-daemon` in the v1 script: it is absent on the measured MMR200 image, while the shell pattern above is already used by the target-family CPDC deployment. Treat any future target-specific daemon helper as a separately tested follow-up, not an untested conditional branch in this script.
+Do not call or require `start-stop-daemon` in the v1 script. Validate that a PID file refers to this supervisor by matching both the script path and private action token in `/proc/<pid>/cmdline`; a live unrelated PID is stale and must never be signaled. Before reporting a successful start, wait one second and confirm that the supervisor remains alive. Stop sends TERM to the supervisor, which forwards TERM to its current child and waits for it; retain the PID file and return failure if shutdown exceeds five seconds.
 
 Implement `start`, `stop`, `restart`, and `status`. Validate an existing PID file as a decimal live PID before declaring the service running. Stop sends TERM and waits up to 5 seconds; if the process remains alive, return failure instead of silently deleting the PID file. UDP bind failure must not terminate the process because recovery is internal to the service.
 
@@ -1146,6 +1142,8 @@ The tee mode must never open/configure the UART, use a direct-read fallback, wri
 
 The analyzer must discard only an incomplete sentence at each capture boundary, reconstruct the remaining UART NMEA in byte order, and compare it to UDP payloads one-for-one. Its machine-readable summary and human report must contain UART complete-sentence count, UDP datagram count, loss/duplicate/reorder counts, and the first differing index and payloads.
 
+For GNSSAgent `recvmsg` records, extract application payload only from `msg_iov`; never take the first quoted C string because `msg_name` commonly contains `inet_addr("127.0.0.1")`. Unit fixtures must cover upstream strace 4.13/current `msg_iov=[{iov_base=...}]` rendering and count-style `msg_iov(1)=[{...}]` rendering. Before device acceptance closes, archive and add a fixture taken from the target's actual strace 4.13 output, including `msg_name` and any `SO_RXQ_OVFL` control-message rendering.
+
 Capture completeness must be proven without naively equating raw UART RX delta to application `read()` bytes: RX counters advance when the driver receives bytes, while `read()` can consume bytes queued before/after the snapshot boundary. Instead require every successful traced `read()` record to be present, fully decoded to exactly its syscall return length, and free of unresolved unfinished/resumed calls or strace truncation; require clean attach/detach status; and require tcpdump's final kernel-drop count to be zero. Archive the UART RX snapshots as independent sanity evidence. If a target exposes queue depth at both endpoints without opening the UART, the tool may additionally check `read_bytes = rx_delta + queued_before - queued_after`. Any failed completeness check marks the run `capture_invalid`; it must never be reported as UDP loss or as a passing run.
 
 For `forward_delay`, match each UART sentence-completion occurrence to the corresponding GNSSAgent UDP-read occurrence in FIFO order, including repeated identical sentences. Calculate milliseconds from the two device-side `-ttt` timestamps and report sample count plus nearest-rank p50, p95, p99, and maximum. Missing GNSSAgent receive events, negative deltas, an incomplete capture, unavailable `strace`/`tcpdump`, or an unexpected process restart makes the relevant acceptance result fail with a prerequisite/invalid-capture reason; it is not a silent skip.
@@ -1203,7 +1201,9 @@ On every target, archive:
 - UART-owner-to-GNSSAgent UDP-read `forward_delay` sample count and p50/p95/p99/max from the same tee-verifier run;
 - GPS/BeiDou/combined-mode status samples;
 - 24-hour memory, process-exit, old-field, and UDP-drop results, with the persistent `LOG_FILE` and optional `.1` copied to the host evidence directory before teardown or redeployment;
-- `log-size-before.txt` and `log-size-after.txt` containing active/backup byte sizes and calculated 24-hour on-device footprint change; each file must remain at or below `LOG_MAX_BYTES + 4096`, `.2` must not exist, no two default-info periodic summaries may be less than 55 seconds apart, and the 24-hour summary count must not exceed 1441.
+- `log-size-before.txt` and `log-size-after.txt` containing active/backup byte sizes and calculated 24-hour on-device footprint change; each file must remain at or below `LOG_MAX_BYTES + 4096`, and `.2` must not exist.
+- Copy `CONSOLE_LOG` and its optional `.1` backup. Neither may contain `persistent log disabled after terminal error`, an unrecovered `open configured log file` failure, or a supervisor restart storm.
+- Across the active structured log plus `.1`, the 24-hour default-info summary count must be between **1430 and 1441 inclusive**. No adjacent summaries may be less than 55 seconds apart. The lower bound prevents a stopped logger or failed rotation from passing merely because the former upper bound was satisfied.
 
 The GNSSAgent repository owns the tee verifier and the GNSSAgent acceptance operator runs it. The UART-owner team may supply target-specific process/UART identifiers, but GNSSAgent completion does not wait for that team to invent a separate tool. This is a one-shot host-side acceptance capture only; it does not restore UART inspection or link-budget collection to Task 12 or the deployed service.
 
@@ -1238,6 +1238,6 @@ Implementation is complete only when:
 - no-input silence and no-fix publication pass;
 - default info logging emits 60-second summaries, one-second summaries are debug-only, and repeated warnings are rate-limited;
 - four target binaries build reproducibly without CGO or CCU-Audio;
-- SysV deployment uses the portable shell/PID-file start path, writes through the process-owned 8 MiB plus one-backup rotating `LOG_FILE`, and contains no UART checks or link-budget collection;
+- SysV deployment uses the repository-owned, PID-identity-checked shell supervisor with bounded child-restart backoff; it writes through the process-owned 8 MiB plus one-backup rotating `LOG_FILE`, preserves retry stderr without per-child truncation, and contains no UART checks or link-budget collection;
 - the repository-owned tee verifier proves UART-to-UDP one-to-one fidelity, capture completeness, and `forward_delay` percentiles on every target;
 - all automated and device acceptance evidence, including the persistent 24-hour logs and measured log-footprint change, is archived.

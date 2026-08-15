@@ -3,9 +3,11 @@ $projectRoot = Split-Path -Parent $PSScriptRoot
 $defaultsPath = Join-Path $projectRoot "deploy\default\gnssagent"
 $initPath = Join-Path $projectRoot "deploy\init.d\gnssagent"
 $smokePath = Join-Path $projectRoot "tests\device\smoke.sh"
+$supervisorTestPath = Join-Path $projectRoot "tests\device\init_supervisor.test.sh"
 $rotatingPath = Join-Path $projectRoot "internal\observe\rotating_file.go"
+$planPath = Join-Path $projectRoot "docs\superpowers\plans\2026-08-03-gnss-agent-udp-implementation-plan.md"
 
-foreach ($path in @($defaultsPath, $initPath, $smokePath, $rotatingPath)) {
+foreach ($path in @($defaultsPath, $initPath, $smokePath, $supervisorTestPath, $rotatingPath, $planPath)) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
         throw "Required deployment file is missing: $path"
     }
@@ -15,6 +17,7 @@ $defaults = Get-Content -LiteralPath $defaultsPath -Raw
 $init = Get-Content -LiteralPath $initPath -Raw
 $smoke = Get-Content -LiteralPath $smokePath -Raw
 $rotating = Get-Content -LiteralPath $rotatingPath -Raw
+$plan = Get-Content -LiteralPath $planPath -Raw
 
 $requiredDefaults = @(
     'UDP_LISTEN=127.0.0.1:29501',
@@ -80,6 +83,17 @@ if (([regex]::Matches($init, 'exec 3>"\$CONSOLE_LOG"')).Count -ne 1) {
 }
 if (-not $init.Contains('mv "$CONSOLE_LOG" "$CONSOLE_LOG.1"')) {
     throw "The previous supervisor console log must be retained as one fixed backup"
+}
+
+foreach ($text in @(
+    'between **1430 and 1441 inclusive**',
+    'No adjacent summaries may be less than 55 seconds apart',
+    'persistent log disabled after terminal error',
+    'open configured log file'
+)) {
+    if (-not $plan.Contains($text)) {
+        throw "24-hour acceptance plan is missing: $text"
+    }
 }
 
 foreach ($text in @('netstat -lun', 'netstat -lnt', 'ss -lun', 'ss -lnt', 'LOG_MAX_BYTES + 4096')) {

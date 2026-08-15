@@ -250,8 +250,34 @@ func TestServerReturnsFullForAlreadyBufferedLegalSubscribe(t *testing.T) {
 	server := newServer("unused", 1, 0, net.Listen, func(_ net.Conn, destination []byte) (int, bool) {
 		return copy(destination, buffered), true
 	})
-	serverConn, client := net.Pipe()
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	accepted := make(chan net.Conn, 1)
+	acceptErr := make(chan error, 1)
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			acceptErr <- err
+			return
+		}
+		accepted <- conn
+	}()
+	client, err := net.Dial("tcp4", listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer client.Close()
+	var serverConn net.Conn
+	select {
+	case serverConn = <-accepted:
+	case err := <-acceptErr:
+		t.Fatal(err)
+	case <-time.After(time.Second):
+		t.Fatal("loopback test connection was not accepted")
+	}
 	go server.rejectFull(serverConn)
 	assertACK(t, client, protocol.SubscribeServerFull)
 }
