@@ -146,6 +146,58 @@ _RESUMED = re.compile(
     r"(?P<args>.*)\)\s+=\s+(?P<ret>-?\d+)"
 )
 _C_STRING = re.compile(r'"(?P<data>(?:[^"\\]|\\.)*)"(?P<truncated>\.\.\.)?')
+_MSG_IOV = re.compile(r"\bmsg_iov(?:\(\d+\))?\s*=\s*\[")
+
+
+def _matching_square_bracket(text: str, opening: int) -> Optional[int]:
+    depth = 0
+    in_string = False
+    escaped = False
+    for index in range(opening, len(text)):
+        char = text[index]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char == "[":
+            depth += 1
+        elif char == "]":
+            depth -= 1
+            if depth == 0:
+                return index
+    return None
+
+
+def _decode_syscall_buffer(arguments: str, syscall_name: str) -> tuple[Optional[bytes], str]:
+    if syscall_name == "recvmsg":
+        marker = _MSG_IOV.search(arguments)
+        if not marker:
+            return None, "successful recvmsg has no msg_iov buffer"
+        opening = marker.end() - 1
+        closing = _matching_square_bracket(arguments, opening)
+        if closing is None:
+            return None, "successful recvmsg has malformed msg_iov buffer"
+        region = arguments[opening + 1:closing]
+        matches = list(_C_STRING.finditer(region))
+    else:
+        region = arguments
+        match = _C_STRING.search(region)
+        matches = [match] if match else []
+
+    if not matches:
+        return None, f"successful {syscall_name} has no decoded buffer"
+    if any(match.group("truncated") for match in matches):
+        return None, f"strace truncated a successful {syscall_name} buffer"
+    try:
+        return b"".join(decode_c_string(match.group("data")) for match in matches), ""
+    except ValueError as error:
+        return None, str(error)
 
 
 def parse_strace(
@@ -234,17 +286,9 @@ def _append_trace_event(
         return
     if end_time is not None and timestamp > end_time:
         return
-    string_match = _C_STRING.search(arguments)
-    if not string_match:
-        errors.append(f"line {line_number}: successful {syscall_name} has no decoded buffer")
-        return
-    if string_match.group("truncated"):
-        errors.append(f"line {line_number}: strace truncated a successful {syscall_name} buffer")
-        return
-    try:
-        data = decode_c_string(string_match.group("data"))
-    except ValueError as error:
-        errors.append(f"line {line_number}: {error}")
+    data, decode_error = _decode_syscall_buffer(arguments, syscall_name)
+    if data is None:
+        errors.append(f"line {line_number}: {decode_error}")
         return
     if len(data) != returned:
         errors.append(
@@ -452,6 +496,8 @@ def parse_pcap_udp(
         return [], ["unsupported pcap magic"]
     endian, fraction_scale = formats[magic]
     link_type = struct.unpack_from(endian + "I", data, 20)[0]
+    if link_type not in {0, 1, 113, 276}:
+        return [], [f"unsupported pcap link type {link_type}"]
     offset = 24
     events: list[TraceEvent] = []
     errors: list[str] = []

@@ -56,6 +56,35 @@ class CStringAndStraceTests(unittest.TestCase):
         )
         self.assertIn("unresolved unfinished", unresolved.errors[0])
 
+    def test_recvmsg_uses_iov_payload_not_msg_name_string(self):
+        payload = r"$GPGSV,1,1,00*79\r\n"
+        capture = parse_strace(
+            (
+                '100 1700000000.100000 recvmsg(5, '
+                '{msg_name={sa_family=AF_INET, sin_port=htons(40000), '
+                'sin_addr=inet_addr("127.0.0.1")}, msg_namelen=16, '
+                f'msg_iov=[{{iov_base="{payload}", iov_len=1025}}], msg_iovlen=1, '
+                'msg_control=[{cmsg_len=20, cmsg_level=SOL_SOCKET, '
+                'cmsg_type=SO_RXQ_OVFL, cmsg_data=[0]}], msg_controllen=24, '
+                'msg_flags=0}, 0) = 18'
+            ),
+            {"recvmsg"},
+        )
+        self.assertTrue(capture.valid, capture.errors)
+        self.assertEqual([event.data for event in capture.events], [b"$GPGSV,1,1,00*79\r\n"])
+
+    def test_recvmsg_accepts_strace_iov_count_rendering(self):
+        capture = parse_strace(
+            (
+                '100 1700000000.100000 recvmsg(5, '
+                '{msg_name(16)={sa_family=AF_INET, sin_addr=inet_addr("127.0.0.1")}, '
+                'msg_iov(1)=[{"$A*00\\n", 1025}], msg_controllen=0, msg_flags=0}, 0) = 6'
+            ),
+            {"recvmsg"},
+        )
+        self.assertTrue(capture.valid, capture.errors)
+        self.assertEqual([event.data for event in capture.events], [b"$A*00\n"])
+
 
 class SentenceAndSequenceTests(unittest.TestCase):
     def test_only_leading_and_trailing_half_sentences_are_excluded(self):
@@ -175,6 +204,12 @@ class PcapTests(unittest.TestCase):
         self.assertEqual(errors, [])
         self.assertEqual([event.data for event in events], [payload])
         self.assertEqual(events[0].timestamp, 100.5)
+
+    def test_rejects_unsupported_link_type_instead_of_silently_ignoring_capture(self):
+        global_header = b"\xd4\xc3\xb2\xa1" + struct.pack("<HHIIII", 2, 4, 0, 0, 65535, 999)
+        events, errors = parse_pcap_udp(global_header, 29501)
+        self.assertEqual(events, [])
+        self.assertEqual(errors, ["unsupported pcap link type 999"])
 
 
 if __name__ == "__main__":
