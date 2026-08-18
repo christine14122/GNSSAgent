@@ -29,7 +29,7 @@ $required = @(
     'go1.26.4.windows-amd64.zip',
     '3ca8fb4630b07c419cbdd51f754e31363cfcfb83b3a5354d9e895c90be2cc345',
     'Get-Command',
-    'Get-FileHash',
+    'System.Security.Cryptography.SHA256',
     'GNSSAgent-CCU',
     'GNSSAgent-MultibandRadio',
     'GNSSAgent-MultibandHandheld',
@@ -51,7 +51,7 @@ foreach ($text in @(
     '07c35866cdd864b81bb6f1cfbf25ac7f87ddc3a976ede1bf5112acbb12dfe6dc',
     'go version go1.23.12 windows/amd64',
     'Get-Command',
-    'Get-FileHash',
+    'System.Security.Cryptography.SHA256',
     'GNSSAgent-HF',
     'CGO_ENABLED',
     '-trimpath',
@@ -106,6 +106,12 @@ foreach ($script in @($main, $hf, $make)) {
         if ($script.Contains($forbidden)) {
             throw "Build script contains forbidden text: $forbidden"
         }
+    }
+}
+
+foreach ($script in @($main, $hf)) {
+    if ($script.Contains('Get-FileHash')) {
+        throw "PowerShell build script depends on unavailable Get-FileHash module resolution"
     }
 }
 

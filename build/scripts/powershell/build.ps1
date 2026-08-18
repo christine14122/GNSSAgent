@@ -21,6 +21,21 @@ function Restore-ProcessEnvironment {
     [Environment]::SetEnvironmentVariable($Name, $Value, [EnvironmentVariableTarget]::Process)
 }
 
+function Get-FileSha256 {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $stream = [System.IO.File]::OpenRead($Path)
+    try {
+        $sha256 = [System.Security.Cryptography.SHA256]::Create()
+        try {
+            return ([System.BitConverter]::ToString($sha256.ComputeHash($stream))).Replace("-", "").ToLowerInvariant()
+        } finally {
+            $sha256.Dispose()
+        }
+    } finally {
+        $stream.Dispose()
+    }
+}
+
 function Build-GNSSAgent {
     param(
         [Parameter(Mandatory = $true)][string]$Name,
@@ -80,7 +95,7 @@ try {
         if (-not (Test-Path -LiteralPath $compilerArchive -PathType Leaf)) {
             throw "Go 1.26.4 archive is missing: $compilerArchive"
         }
-        $actualHash = (Get-FileHash -LiteralPath $compilerArchive -Algorithm SHA256).Hash.ToLowerInvariant()
+        $actualHash = Get-FileSha256 -Path $compilerArchive
         if ($actualHash -ne $compilerArchiveSha256) {
             throw "Go 1.26.4 archive checksum mismatch: expected $compilerArchiveSha256, got $actualHash"
         }

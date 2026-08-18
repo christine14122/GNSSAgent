@@ -92,9 +92,14 @@ try {
     Clear-Content -LiteralPath $fakeLog
     $env:FAKE_GO_VERSION = "go9.9.9"
     $env:FAKE_GO_FAIL = ""
+    $fixtureCompiler = Join-Path $temporaryRoot "project\build\compiler"
+    New-Item -ItemType Directory -Force -Path $fixtureCompiler | Out-Null
+    Set-Content -LiteralPath (Join-Path $fixtureCompiler "go1.23.12.windows-amd64.zip") `
+        -Value "invalid archive" -Encoding ASCII
+    function Get-FileHash { throw "Get-FileHash is unavailable" }
     Invoke-ExpectedFailure {
         & (Join-Path $fixtureDirectory "build-hf.ps1") -OutputDirectory (Join-Path $temporaryRoot "hf-wrong-version")
-    } "Go 1.23.12 archive is missing"
+    } "Go 1.23.12 archive checksum mismatch"
     Assert-Equal (Get-Item -LiteralPath $fakeLog).Length 0 "HF built with a wrong system Go version"
 } finally {
     Restore-ProcessEnvironment "PATH" $previousPath
