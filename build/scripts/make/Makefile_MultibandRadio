@@ -1,3 +1,7 @@
+ifneq ($(words $(MAKEFILE_LIST)),1)
+$(error Makefile paths cannot contain whitespace)
+endif
+
 MAKE_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 .DEFAULT_GOAL := multiband-radio
 .PHONY: multiband-radio

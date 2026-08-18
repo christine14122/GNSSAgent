@@ -1,5 +1,9 @@
 SHELL := /bin/sh
 
+ifneq ($(words $(MAKEFILE_LIST)),1)
+$(error Makefile paths cannot contain whitespace)
+endif
+
 MAKE_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 PROJECT_ROOT := $(abspath $(MAKE_DIR)/../../..)
 COMPILER_DIR := $(PROJECT_ROOT)/build/compiler
@@ -13,17 +17,21 @@ GO126_SHA256 := 1153d3d50e0ac764b447adfe05c2bcf08e889d42a02e0fe0259bd47f6733ad7f
 GO126_ROOT := $(COMPILER_DIR)/.go1.26.4-linux-amd64
 GO126 := $(GO126_ROOT)/bin/go
 GO126_SENTINEL := $(GO126_ROOT)/src/errors/errors.go
+GO126_STAMP := $(GO126_ROOT)/.complete
 
 GO123_ARCHIVE := $(COMPILER_DIR)/go1.23.12.linux-amd64.tar.gz
 GO123_SHA256 := d3847fef834e9db11bf64e3fb34db9c04db14e068eeb064f49af747010454f90
 GO123_ROOT := $(COMPILER_DIR)/.go1.23.12-linux-amd64
 GO123 := $(GO123_ROOT)/bin/go
 GO123_SENTINEL := $(GO123_ROOT)/src/errors/errors.go
+GO123_STAMP := $(GO123_ROOT)/.complete
 
 .DEFAULT_GOAL := all
 .PHONY: all test build ccu hf multiband-radio multiband-handheld go126 go123 clean
 
-all: test build
+all: test
+
+	$(MAKE) --no-print-directory -f "$(MAKE_DIR)/Makefile" build
 
 test: go126
 
@@ -57,9 +65,7 @@ go126:
 
 	printf '%s  %s\n' "$(GO126_SHA256)" "$(GO126_ARCHIVE)" | sha256sum -c -
 
-	if [ ! -x "$(GO126)" ] || [ ! -f "$(GO126_SENTINEL)" ]; then mkdir -p "$(GO126_ROOT)" && tar -xzf "$(GO126_ARCHIVE)" -C "$(GO126_ROOT)" --strip-components=1; fi
-
-	test "$$($(GO126) version)" = "go version go1.26.4 linux/amd64"
+	@lock="$(GO126_ROOT).lock"; retries=0; while ! mkdir "$$lock" 2>/dev/null; do retries=$$((retries + 1)); if [ "$$retries" -ge 60 ]; then echo "Timed out waiting for $$lock" >&2; exit 1; fi; sleep 1; done; trap 'rmdir "$$lock"' EXIT HUP INT TERM; if [ ! -f "$(GO126_STAMP)" ] || [ ! -x "$(GO126)" ] || [ ! -f "$(GO126_SENTINEL)" ]; then rm -f "$(GO126_STAMP)"; mkdir -p "$(GO126_ROOT)" && tar -xzf "$(GO126_ARCHIVE)" -C "$(GO126_ROOT)" --strip-components=1 || exit 1; fi; test "$$("$(GO126)" version)" = "go version go1.26.4 linux/amd64" || exit 1; touch "$(GO126_STAMP)"
 
 go123:
 
@@ -67,9 +73,7 @@ go123:
 
 	printf '%s  %s\n' "$(GO123_SHA256)" "$(GO123_ARCHIVE)" | sha256sum -c -
 
-	if [ ! -x "$(GO123)" ] || [ ! -f "$(GO123_SENTINEL)" ]; then mkdir -p "$(GO123_ROOT)" && tar -xzf "$(GO123_ARCHIVE)" -C "$(GO123_ROOT)" --strip-components=1; fi
-
-	test "$$($(GO123) version)" = "go version go1.23.12 linux/amd64"
+	@lock="$(GO123_ROOT).lock"; retries=0; while ! mkdir "$$lock" 2>/dev/null; do retries=$$((retries + 1)); if [ "$$retries" -ge 60 ]; then echo "Timed out waiting for $$lock" >&2; exit 1; fi; sleep 1; done; trap 'rmdir "$$lock"' EXIT HUP INT TERM; if [ ! -f "$(GO123_STAMP)" ] || [ ! -x "$(GO123)" ] || [ ! -f "$(GO123_SENTINEL)" ]; then rm -f "$(GO123_STAMP)"; mkdir -p "$(GO123_ROOT)" && tar -xzf "$(GO123_ARCHIVE)" -C "$(GO123_ROOT)" --strip-components=1 || exit 1; fi; test "$$("$(GO123)" version)" = "go version go1.23.12 linux/amd64" || exit 1; touch "$(GO123_STAMP)"
 
 clean:
 
