@@ -17,6 +17,8 @@ DIST_DIR := $(PROJECT_ROOT)/build/dist/bin
 MAIN_PACKAGE := ./cmd/gnssagent
 BUILD_FLAGS := -trimpath -buildvcs=false
 LINK_FLAGS := -s -w
+SYSTEM_GO ?= $(shell command -v go 2>/dev/null)
+MAKE_RUNNER := $(MAKE)
 
 GO126_ARCHIVE := $(COMPILER_DIR)/go1.26.4.linux-amd64.tar.gz
 GO126_SHA256 := 1153d3d50e0ac764b447adfe05c2bcf08e889d42a02e0fe0259bd47f6733ad7f
@@ -32,6 +34,50 @@ GO123 := $(GO123_ROOT)/bin/go
 GO123_SENTINEL := $(GO123_ROOT)/src/errors/errors.go
 GO123_STAMP := $(GO123_ROOT)/.complete
 
+define RUN_WITH_GO126_FALLBACK
+	@system_go="$(SYSTEM_GO)"; \
+	if [ -n "$$system_go" ]; then \
+		version="$$("$$system_go" version 2>&1)" || version="unavailable"; \
+		echo "Using system Go: $$system_go ($$version)"; \
+		if cd "$(PROJECT_ROOT)" && GOTOOLCHAIN=local $(1) "$$system_go" $(2); then \
+			exit 0; \
+		fi; \
+		echo "System Go command failed; retrying with bundled Go 1.26.4" >&2; \
+	else \
+		echo "System Go not found; using bundled Go 1.26.4"; \
+	fi; \
+	"$(MAKE_RUNNER)" --no-print-directory -f "$(MAKE_DIR)/Makefile" go126 || exit $$?; \
+	if cd "$(PROJECT_ROOT)" && GOTOOLCHAIN=local GOROOT="$(GO126_ROOT)" $(1) "$(GO126)" $(2); then \
+		exit 0; \
+	else \
+		status=$$?; \
+		echo "Bundled Go 1.26.4 command failed" >&2; \
+		exit $$status; \
+	fi
+endef
+
+define RUN_HF_ONCE
+	@system_go="$(SYSTEM_GO)"; \
+	version=""; \
+	if [ -n "$$system_go" ]; then version="$$("$$system_go" version 2>&1)" || version="unavailable"; fi; \
+	if [ "$$version" = "go version go1.23.12 linux/amd64" ]; then \
+		echo "Using system Go for HF: $$system_go ($$version)"; \
+		cd "$(PROJECT_ROOT)" && GOTOOLCHAIN=local CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 \
+			"$$system_go" build $(BUILD_FLAGS) -ldflags "$(LINK_FLAGS) -X gnssagent/internal/buildinfo.Target=hf" \
+			-o "$(DIST_DIR)/GNSSAgent-HF" $(MAIN_PACKAGE); \
+	else \
+		if [ -n "$$system_go" ]; then \
+			echo "System Go is not go1.23.12 linux/amd64 ($$version); using bundled Go 1.23.12"; \
+		else \
+			echo "System Go not found; using bundled Go 1.23.12"; \
+		fi; \
+		"$(MAKE_RUNNER)" --no-print-directory -f "$(MAKE_DIR)/Makefile" go123 || exit $$?; \
+		cd "$(PROJECT_ROOT)" && GOTOOLCHAIN=local GOROOT="$(GO123_ROOT)" CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 \
+			"$(GO123)" build $(BUILD_FLAGS) -ldflags "$(LINK_FLAGS) -X gnssagent/internal/buildinfo.Target=hf" \
+			-o "$(DIST_DIR)/GNSSAgent-HF" $(MAIN_PACKAGE); \
+	fi
+endef
+
 .DEFAULT_GOAL := all
 .PHONY: all test build ccu hf multiband-radio multiband-handheld go126 go123 clean
 
@@ -39,27 +85,27 @@ all: test
 
 	$(MAKE) --no-print-directory -f "$(MAKE_DIR)/Makefile" build
 
-test: go126
+test:
 
-	cd "$(PROJECT_ROOT)" && GOTOOLCHAIN=local GOROOT="$(GO126_ROOT)" "$(GO126)" test ./...
+	$(call RUN_WITH_GO126_FALLBACK,,test ./...)
 
 build: ccu multiband-radio multiband-handheld hf
 
-ccu: go126 | $(DIST_DIR)
+ccu: | $(DIST_DIR)
 
-	cd "$(PROJECT_ROOT)" && GOTOOLCHAIN=local GOROOT="$(GO126_ROOT)" CGO_ENABLED=0 GOOS=linux GOARCH=amd64 "$(GO126)" build $(BUILD_FLAGS) -ldflags "$(LINK_FLAGS) -X gnssagent/internal/buildinfo.Target=ccu" -o "$(DIST_DIR)/GNSSAgent-CCU" $(MAIN_PACKAGE)
+	$(call RUN_WITH_GO126_FALLBACK,CGO_ENABLED=0 GOOS=linux GOARCH=amd64,build $(BUILD_FLAGS) -ldflags "$(LINK_FLAGS) -X gnssagent/internal/buildinfo.Target=ccu" -o "$(DIST_DIR)/GNSSAgent-CCU" $(MAIN_PACKAGE))
 
-multiband-radio: go126 | $(DIST_DIR)
+multiband-radio: | $(DIST_DIR)
 
-	cd "$(PROJECT_ROOT)" && GOTOOLCHAIN=local GOROOT="$(GO126_ROOT)" CGO_ENABLED=0 GOOS=linux GOARCH=arm64 GOARM64=v8.0 "$(GO126)" build $(BUILD_FLAGS) -ldflags "$(LINK_FLAGS) -X gnssagent/internal/buildinfo.Target=multiband-radio" -o "$(DIST_DIR)/GNSSAgent-MultibandRadio" $(MAIN_PACKAGE)
+	$(call RUN_WITH_GO126_FALLBACK,CGO_ENABLED=0 GOOS=linux GOARCH=arm64 GOARM64=v8.0,build $(BUILD_FLAGS) -ldflags "$(LINK_FLAGS) -X gnssagent/internal/buildinfo.Target=multiband-radio" -o "$(DIST_DIR)/GNSSAgent-MultibandRadio" $(MAIN_PACKAGE))
 
-multiband-handheld: go126 | $(DIST_DIR)
+multiband-handheld: | $(DIST_DIR)
 
-	cd "$(PROJECT_ROOT)" && GOTOOLCHAIN=local GOROOT="$(GO126_ROOT)" CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 "$(GO126)" build $(BUILD_FLAGS) -ldflags "$(LINK_FLAGS) -X gnssagent/internal/buildinfo.Target=multiband-handheld" -o "$(DIST_DIR)/GNSSAgent-MultibandHandheld" $(MAIN_PACKAGE)
+	$(call RUN_WITH_GO126_FALLBACK,CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7,build $(BUILD_FLAGS) -ldflags "$(LINK_FLAGS) -X gnssagent/internal/buildinfo.Target=multiband-handheld" -o "$(DIST_DIR)/GNSSAgent-MultibandHandheld" $(MAIN_PACKAGE))
 
-hf: go123 | $(DIST_DIR)
+hf: | $(DIST_DIR)
 
-	cd "$(PROJECT_ROOT)" && GOTOOLCHAIN=local GOROOT="$(GO123_ROOT)" CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 "$(GO123)" build $(BUILD_FLAGS) -ldflags "$(LINK_FLAGS) -X gnssagent/internal/buildinfo.Target=hf" -o "$(DIST_DIR)/GNSSAgent-HF" $(MAIN_PACKAGE)
+	$(RUN_HF_ONCE)
 
 $(DIST_DIR):
 

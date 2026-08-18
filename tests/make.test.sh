@@ -32,19 +32,18 @@ dry_run() {
 }
 
 assert_target() {
-    target=$1 go_root=$2 version=$3 environment=$4 output_name=$5 link_target=$6
+    target=$1 go_root=$2 environment=$3 output_name=$4 link_target=$5
     output=$(dry_run "$target")
     require_contains "$output" "$environment" "$target dry run"
     require_contains "$output" "$go_root" "$target dry run"
-    require_contains "$output" "go version $version linux/amd64" "$target dry run"
     require_contains "$output" "$output_name" "$target dry run"
     require_contains "$output" "gnssagent/internal/buildinfo.Target=$link_target" "$target dry run"
 }
 
-assert_target ccu '.go1.26.4-linux-amd64' 'go1.26.4' 'GOOS=linux GOARCH=amd64' 'GNSSAgent-CCU' ccu
-assert_target multiband-radio '.go1.26.4-linux-amd64' 'go1.26.4' 'GOOS=linux GOARCH=arm64 GOARM64=v8.0' 'GNSSAgent-MultibandRadio' multiband-radio
-assert_target multiband-handheld '.go1.26.4-linux-amd64' 'go1.26.4' 'GOOS=linux GOARCH=arm GOARM=7' 'GNSSAgent-MultibandHandheld' multiband-handheld
-assert_target hf '.go1.23.12-linux-amd64' 'go1.23.12' 'GOOS=linux GOARCH=arm GOARM=7' 'GNSSAgent-HF' hf
+assert_target ccu '.go1.26.4-linux-amd64' 'GOOS=linux GOARCH=amd64' 'GNSSAgent-CCU' ccu
+assert_target multiband-radio '.go1.26.4-linux-amd64' 'GOOS=linux GOARCH=arm64 GOARM64=v8.0' 'GNSSAgent-MultibandRadio' multiband-radio
+assert_target multiband-handheld '.go1.26.4-linux-amd64' 'GOOS=linux GOARCH=arm GOARM=7' 'GNSSAgent-MultibandHandheld' multiband-handheld
+assert_target hf '.go1.23.12-linux-amd64' 'GOOS=linux GOARCH=arm GOARM=7' 'GNSSAgent-HF' hf
 
 for wrapper_target in ccu hf multiband-radio multiband-handheld; do
     case "$wrapper_target" in
@@ -66,14 +65,28 @@ make_archive() {
     printf '%s\n' '#!/bin/sh' \
         'case "$1" in' \
         "version) printf '%s\\n' 'go version $version linux/amd64' ;;" \
-        'test) sleep "${FAKE_TEST_SLEEP:-0}"; [ "${FAKE_TEST_FAIL:-0}" = 0 ] || exit 1 ;;' \
-        'build) printf build\\n >> "${FAKE_EVENT_LOG:?}" ;;' \
+        'test) [ -z "${FAKE_EVENT_LOG:-}" ] || printf bundled-test\\n >> "$FAKE_EVENT_LOG"; sleep "${FAKE_TEST_SLEEP:-0}"; [ "${FAKE_TEST_FAIL:-0}" = 0 ] || exit 1 ;;' \
+        'build) [ -z "${FAKE_EVENT_LOG:-}" ] || printf bundled-build\\n >> "$FAKE_EVENT_LOG"; [ "${FAKE_BUILD_FAIL:-0}" = 0 ] || exit 1 ;;' \
         '*) exit 0 ;;' \
         'esac' > "$stage/go/bin/go"
     chmod +x "$stage/go/bin/go"
     : > "$stage/go/src/errors/errors.go"
     : > "$stage/go/src/runtime/recovered.go"
     tar -czf "$archive" -C "$stage" go
+}
+
+make_system_go() {
+    directory=$1
+    version=$2
+    mkdir -p "$directory"
+    printf '%s\n' '#!/bin/sh' \
+        'case "$1" in' \
+        "version) printf '%s\\n' 'go version $version linux/amd64' ;;" \
+        'test) printf system-test\\n >> "${FAKE_SYSTEM_LOG:?}"; [ "${FAKE_SYSTEM_FAIL:-0}" = 0 ] ;;' \
+        'build) printf system-build\\n >> "${FAKE_SYSTEM_LOG:?}"; [ "${FAKE_SYSTEM_FAIL:-0}" = 0 ] ;;' \
+        '*) exit 1 ;;' \
+        'esac' > "$directory/go"
+    chmod +x "$directory/go"
 }
 
 compiler_dir="$project_dir/build/compiler"
@@ -92,6 +105,78 @@ run_make() {
         GO126_ARCHIVE="$archive126" GO126_SHA256="$sha126" GO126_ROOT="$root126" \
         GO123_ARCHIVE="$archive123" GO123_SHA256="$sha123" GO123_ROOT="$root123" "$@"
 }
+
+system_bin="$tmp_dir/system-bin"
+system_log="$tmp_dir/system.log"
+bundled_log="$tmp_dir/bundled.log"
+make_system_go "$system_bin" go9.9.9
+
+: > "$system_log"
+FAKE_SYSTEM_LOG="$system_log" FAKE_SYSTEM_FAIL=0 \
+    make -f "$make_dir/Makefile" SYSTEM_GO="$system_bin/go" \
+    GO126_ARCHIVE="$tmp_dir/not-needed.tar.gz" test
+[ "$(grep -c '^system-test$' "$system_log")" = 1 ] || fail 'system Go success did not run exactly once'
+
+: > "$system_log"
+: > "$bundled_log"
+FAKE_SYSTEM_LOG="$system_log" FAKE_SYSTEM_FAIL=1 FAKE_EVENT_LOG="$bundled_log" \
+    run_make "$tmp_dir/fallback126" "$tmp_dir/fallback123" SYSTEM_GO="$system_bin/go" ccu
+[ "$(grep -c '^system-build$' "$system_log")" = 1 ] || fail 'system Go failure was not attempted once'
+[ "$(grep -c '^bundled-build$' "$bundled_log")" = 1 ] || fail 'bundled Go fallback was not attempted once'
+
+: > "$system_log"
+: > "$bundled_log"
+if FAKE_SYSTEM_LOG="$system_log" FAKE_SYSTEM_FAIL=1 FAKE_EVENT_LOG="$bundled_log" FAKE_BUILD_FAIL=1 \
+    run_make "$tmp_dir/fail126" "$tmp_dir/fail123" SYSTEM_GO="$system_bin/go" ccu; then
+    fail 'two failed ordinary Go attempts were accepted'
+fi
+[ "$(grep -c '^system-build$' "$system_log")" = 1 ] || fail 'failed system Go ran more than once'
+[ "$(grep -c '^bundled-build$' "$bundled_log")" = 1 ] || fail 'failed bundled Go ran more than once'
+
+: > "$bundled_log"
+FAKE_EVENT_LOG="$bundled_log" run_make "$tmp_dir/no-system126" "$tmp_dir/no-system123" SYSTEM_GO= ccu
+[ "$(grep -c '^bundled-build$' "$bundled_log")" = 1 ] || fail 'missing system Go did not use bundled Go'
+
+: > "$system_log"
+: > "$bundled_log"
+FAKE_SYSTEM_LOG="$system_log" FAKE_SYSTEM_FAIL=1 FAKE_EVENT_LOG="$bundled_log" \
+    run_make "$tmp_dir/test-fallback126" "$tmp_dir/test-fallback123" SYSTEM_GO="$system_bin/go" test
+[ "$(grep -c '^system-test$' "$system_log")" = 1 ] || fail 'failed system Go test was not attempted once'
+[ "$(grep -c '^bundled-test$' "$bundled_log")" = 1 ] || fail 'bundled Go test fallback was not attempted once'
+
+hf_exact_bin="$tmp_dir/hf-exact-bin"
+hf_wrong_bin="$tmp_dir/hf-wrong-bin"
+make_system_go "$hf_exact_bin" go1.23.12
+make_system_go "$hf_wrong_bin" go1.26.4
+
+: > "$system_log"
+FAKE_SYSTEM_LOG="$system_log" FAKE_SYSTEM_FAIL=0 \
+    make -f "$make_dir/Makefile" SYSTEM_GO="$hf_exact_bin/go" \
+    GO123_ARCHIVE="$tmp_dir/not-needed-hf.tar.gz" hf
+[ "$(grep -c '^system-build$' "$system_log")" = 1 ] || fail 'HF exact system Go was not used once'
+
+: > "$system_log"
+: > "$bundled_log"
+if FAKE_SYSTEM_LOG="$system_log" FAKE_SYSTEM_FAIL=1 FAKE_EVENT_LOG="$bundled_log" \
+    run_make "$tmp_dir/hf-no-retry126" "$tmp_dir/hf-no-retry123" SYSTEM_GO="$hf_exact_bin/go" hf; then
+    fail 'HF accepted a failed exact system Go build'
+fi
+[ ! -s "$bundled_log" ] || fail 'HF retried after exact system Go failed'
+
+: > "$system_log"
+: > "$bundled_log"
+FAKE_SYSTEM_LOG="$system_log" FAKE_EVENT_LOG="$bundled_log" \
+    run_make "$tmp_dir/hf-wrong126" "$tmp_dir/hf-wrong123" SYSTEM_GO="$hf_wrong_bin/go" hf
+[ ! -s "$system_log" ] || fail 'HF built with a non-1.23.12 system Go'
+[ "$(grep -c '^bundled-build$' "$bundled_log")" = 1 ] || fail 'HF wrong system version did not select bundled Go'
+
+: > "$bundled_log"
+FAKE_EVENT_LOG="$bundled_log" run_make "$tmp_dir/hf-no-system126" "$tmp_dir/hf-no-system123" SYSTEM_GO= hf
+[ "$(grep -c '^bundled-build$' "$bundled_log")" = 1 ] || fail 'HF missing system Go did not select bundled Go'
+
+: > "$system_log"
+FAKE_SYSTEM_LOG="$system_log" make -n -f "$make_dir/Makefile" SYSTEM_GO="$system_bin/go" ccu >/dev/null
+[ ! -s "$system_log" ] || fail 'make -n executed a Go command'
 
 missing_archive="$tmp_dir/missing-go126.tar.gz"
 missing_root="$tmp_dir/missing-go126"
@@ -202,7 +287,7 @@ event_log="$tmp_dir/events.log"
 if FAKE_EVENT_LOG="$event_log" FAKE_TEST_SLEEP=1 FAKE_TEST_FAIL=1 run_make "$tmp_dir/barrier126" "$tmp_dir/barrier123" -j 2 all >/dev/null 2>&1; then
     fail 'all accepted a failing test'
 fi
-if [ -f "$event_log" ] && grep -q '^build$' "$event_log"; then
+if [ -f "$event_log" ] && grep -q '^bundled-build$' "$event_log"; then
     fail 'all started builds before tests completed'
 fi
 
