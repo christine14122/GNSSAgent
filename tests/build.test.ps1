@@ -26,7 +26,10 @@ $hf = Get-Content -LiteralPath $hfScript -Raw
 $make = Get-Content -LiteralPath $primaryMakefile -Raw
 
 $required = @(
-    'go1.25.5',
+    'go1.26.4.windows-amd64.zip',
+    '3ca8fb4630b07c419cbdd51f754e31363cfcfb83b3a5354d9e895c90be2cc345',
+    'Get-Command',
+    'Get-FileHash',
     'GNSSAgent-CCU',
     'GNSSAgent-MultibandRadio',
     'GNSSAgent-MultibandHandheld',
@@ -43,7 +46,18 @@ foreach ($text in $required) {
     }
 }
 
-foreach ($text in @('go1.23.12', 'GNSSAgent-HF', 'CGO_ENABLED', '-trimpath', '-s -w', 'gnssagent/internal/buildinfo.Target')) {
+foreach ($text in @(
+    'go1.23.12.windows-amd64.zip',
+    '07c35866cdd864b81bb6f1cfbf25ac7f87ddc3a976ede1bf5112acbb12dfe6dc',
+    'go version go1.23.12 windows/amd64',
+    'Get-Command',
+    'Get-FileHash',
+    'GNSSAgent-HF',
+    'CGO_ENABLED',
+    '-trimpath',
+    '-s -w',
+    'gnssagent/internal/buildinfo.Target'
+)) {
     if (-not $hf.Contains($text)) {
         throw "build-hf.ps1 is missing required contract text: $text"
     }

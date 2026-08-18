@@ -4,20 +4,10 @@ param(
 
 $ErrorActionPreference = "Stop"
 $projectRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
-$compilerArchive = Join-Path $projectRoot "build\compiler\go1.25.5.windows-amd64.zip"
-$compilerRoot = Join-Path $projectRoot "build\compiler\.go1.25.5"
-$goExe = Join-Path $compilerRoot "go\bin\go.exe"
-
-if (-not (Test-Path -LiteralPath $compilerArchive -PathType Leaf)) {
-    throw "Go 1.25.5 archive is missing: $compilerArchive"
-}
-if (-not (Test-Path -LiteralPath $compilerRoot)) {
-    New-Item -ItemType Directory -Path $compilerRoot | Out-Null
-    Expand-Archive -LiteralPath $compilerArchive -DestinationPath $compilerRoot
-}
-if (-not (Test-Path -LiteralPath $goExe -PathType Leaf)) {
-    throw "Go 1.25.5 executable is missing from the extracted toolchain: $goExe"
-}
+$compilerArchive = Join-Path $projectRoot "build\compiler\go1.26.4.windows-amd64.zip"
+$compilerArchiveSha256 = "3ca8fb4630b07c419cbdd51f754e31363cfcfb83b3a5354d9e895c90be2cc345"
+$compilerRoot = Join-Path $projectRoot "build\compiler\.go1.26.4-windows-amd64"
+$bundledGoExe = Join-Path $compilerRoot "go\bin\go.exe"
 
 if ([IO.Path]::IsPathRooted($OutputDirectory)) {
     $outputRoot = $OutputDirectory
@@ -77,12 +67,39 @@ $previousGOTOOLCHAIN = $env:GOTOOLCHAIN
 Push-Location $projectRoot
 try {
     $env:GOTOOLCHAIN = "local"
-    $version = (& $goExe version) -join "`n"
-    if ($LASTEXITCODE -ne 0) {
-        throw "Unable to run the Go 1.25.5 toolchain: $goExe"
-    }
-    if ($version.Trim() -ne "go version go1.25.5 windows/amd64") {
-        throw "Expected Go 1.25.5 windows/amd64, got: $version"
+    $systemGo = Get-Command "go" -CommandType Application -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+    if ($null -ne $systemGo) {
+        $goExe = $systemGo.Source
+        $version = (& $goExe version) -join "`n"
+        if ($LASTEXITCODE -ne 0) {
+            throw "Unable to run the system Go toolchain: $goExe"
+        }
+        Write-Host "Using system Go: $goExe ($($version.Trim()))"
+    } else {
+        if (-not (Test-Path -LiteralPath $compilerArchive -PathType Leaf)) {
+            throw "Go 1.26.4 archive is missing: $compilerArchive"
+        }
+        $actualHash = (Get-FileHash -LiteralPath $compilerArchive -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($actualHash -ne $compilerArchiveSha256) {
+            throw "Go 1.26.4 archive checksum mismatch: expected $compilerArchiveSha256, got $actualHash"
+        }
+        if (-not (Test-Path -LiteralPath $bundledGoExe -PathType Leaf)) {
+            New-Item -ItemType Directory -Force -Path $compilerRoot | Out-Null
+            Expand-Archive -LiteralPath $compilerArchive -DestinationPath $compilerRoot -Force
+        }
+        if (-not (Test-Path -LiteralPath $bundledGoExe -PathType Leaf)) {
+            throw "Go 1.26.4 executable is missing from the extracted toolchain: $bundledGoExe"
+        }
+        $goExe = $bundledGoExe
+        $version = (& $goExe version) -join "`n"
+        if ($LASTEXITCODE -ne 0) {
+            throw "Unable to run the Go 1.26.4 toolchain: $goExe"
+        }
+        if ($version.Trim() -ne "go version go1.26.4 windows/amd64") {
+            throw "Expected Go 1.26.4 windows/amd64, got: $version"
+        }
+        Write-Host "Using bundled Go: $goExe ($($version.Trim()))"
     }
 
 	$env:GOOS = "windows"
@@ -92,7 +109,7 @@ try {
 	$env:CGO_ENABLED = "0"
     & $goExe test ./...
     if ($LASTEXITCODE -ne 0) {
-        throw "GNSSAgent tests failed under Go 1.25.5"
+        throw "GNSSAgent tests failed"
     }
 
     Build-GNSSAgent -Name "GNSSAgent-CCU" -GOARCH "amd64" -Target "ccu"
