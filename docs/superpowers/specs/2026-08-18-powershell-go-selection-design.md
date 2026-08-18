@@ -50,7 +50,7 @@ Rejecting a wrong system version before the build is selection, not a compile-fa
 
 ## Archive Handling
 
-- Validate each ZIP with `Get-FileHash -Algorithm SHA256` before extraction, including when an extracted directory already exists.
+- Validate each ZIP with `System.Security.Cryptography.SHA256` before extraction, including when an extracted directory already exists. This avoids depending on PowerShell module auto-loading when `build.bat` launches Windows PowerShell from a PowerShell 7 environment.
 - Use `Expand-Archive -Force` only when the expected bundled `go.exe` is missing.
 - Do not recursively delete any compiler directory.
 - Verify the bundled executable's exact Windows version after extraction.

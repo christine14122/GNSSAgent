@@ -117,9 +117,14 @@ Assert-Equal $calls.Count 1 "HF retried after an exact system Go build failed"
 Clear-Content -LiteralPath $fakeLog
 $env:FAKE_GO_VERSION = "go9.9.9"
 $env:FAKE_GO_FAIL = ""
+$fixtureCompiler = Join-Path $temporaryRoot "project\build\compiler"
+New-Item -ItemType Directory -Force -Path $fixtureCompiler | Out-Null
+Set-Content -LiteralPath (Join-Path $fixtureCompiler "go1.23.12.windows-amd64.zip") `
+    -Value "invalid archive" -Encoding ASCII
+function Get-FileHash { throw "Get-FileHash is unavailable" }
 Invoke-ExpectedFailure {
     & (Join-Path $fixtureDirectory "build-hf.ps1") -OutputDirectory (Join-Path $temporaryRoot "hf-wrong-version")
-} "Go 1.23.12 archive is missing"
+} "Go 1.23.12 archive checksum mismatch"
 Assert-Equal (Get-Item -LiteralPath $fakeLog).Length 0 "HF built with a wrong system Go version"
 ```
 
@@ -137,7 +142,7 @@ In `tests/build.test.ps1`, replace the ordinary `go1.25.5` requirement with thes
 'go1.26.4.windows-amd64.zip',
 '3ca8fb4630b07c419cbdd51f754e31363cfcfb83b3a5354d9e895c90be2cc345',
 'Get-Command',
-'Get-FileHash'
+'System.Security.Cryptography.SHA256'
 ```
 
 Require these strings in `build-hf.ps1`:
@@ -147,10 +152,11 @@ Require these strings in `build-hf.ps1`:
 '07c35866cdd864b81bb6f1cfbf25ac7f87ddc3a976ede1bf5112acbb12dfe6dc',
 'go version go1.23.12 windows/amd64',
 'Get-Command',
-'Get-FileHash'
+'System.Security.Cryptography.SHA256'
 ```
 
 Keep all target, architecture, linker, forbidden-token, Makefile, and wrapper checks.
+Also forbid `Get-FileHash` in both PowerShell build scripts so the `build.bat` path cannot depend on module auto-loading.
 
 - [ ] **Step 3: Run the new tests and verify RED**
 
@@ -184,6 +190,25 @@ $bundledGoExe = Join-Path $compilerRoot "go\bin\go.exe"
 
 Remove the unconditional archive/extraction block from the top of the script.
 
+Add this module-independent checksum helper to both PowerShell build scripts:
+
+```powershell
+function Get-FileSha256 {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $stream = [System.IO.File]::OpenRead($Path)
+    try {
+        $sha256 = [System.Security.Cryptography.SHA256]::Create()
+        try {
+            return ([System.BitConverter]::ToString($sha256.ComputeHash($stream))).Replace("-", "").ToLowerInvariant()
+        } finally {
+            $sha256.Dispose()
+        }
+    } finally {
+        $stream.Dispose()
+    }
+}
+```
+
 - [ ] **Step 2: Select ordinary system Go before bundled Go**
 
 Inside the existing outer `try`, immediately after setting `GOTOOLCHAIN=local`, resolve and select Go once:
@@ -202,7 +227,7 @@ if ($null -ne $systemGo) {
     if (-not (Test-Path -LiteralPath $compilerArchive -PathType Leaf)) {
         throw "Go 1.26.4 archive is missing: $compilerArchive"
     }
-    $actualHash = (Get-FileHash -LiteralPath $compilerArchive -Algorithm SHA256).Hash.ToLowerInvariant()
+    $actualHash = Get-FileSha256 -Path $compilerArchive
     if ($actualHash -ne $compilerArchiveSha256) {
         throw "Go 1.26.4 archive checksum mismatch: expected $compilerArchiveSha256, got $actualHash"
     }
@@ -263,7 +288,7 @@ if ($null -eq $goExe) {
     if (-not (Test-Path -LiteralPath $compilerArchive -PathType Leaf)) {
         throw "Go 1.23.12 archive is missing: $compilerArchive"
     }
-    $actualHash = (Get-FileHash -LiteralPath $compilerArchive -Algorithm SHA256).Hash.ToLowerInvariant()
+    $actualHash = Get-FileSha256 -Path $compilerArchive
     if ($actualHash -ne $compilerArchiveSha256) {
         throw "Go 1.23.12 archive checksum mismatch: expected $compilerArchiveSha256, got $actualHash"
     }
