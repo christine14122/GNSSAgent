@@ -113,10 +113,23 @@ run_make "$partial_root" "$tmp_dir/unused123" go126
 [ -f "$partial_root/.complete" ] || fail 'toolchain completion stamp was not written'
 
 stale_lock_root="$tmp_dir/stale-lock"
+mkdir -p "$stale_lock_root"
 : > "$stale_lock_root.lock"
+: > "$stale_lock_root/.prepare.lock"
 if ! timeout 2 make -f "$make_dir/Makefile" GO126_ARCHIVE="$archive126" GO126_SHA256="$sha126" GO126_ROOT="$stale_lock_root" go126 >/dev/null 2>&1; then
     fail 'an inert lock file blocked toolchain preparation'
 fi
+
+failing_flock_bin="$tmp_dir/failing-flock-bin"
+failing_flock_root="$tmp_dir/failing-flock"
+mkdir -p "$failing_flock_bin"
+printf '%s\n' '#!/bin/sh' 'exit 1' > "$failing_flock_bin/flock"
+chmod +x "$failing_flock_bin/flock"
+if PATH="$failing_flock_bin:$PATH" run_make "$failing_flock_root" "$tmp_dir/unused123" go126 >/dev/null 2>&1; then
+    fail 'flock acquisition failure was accepted'
+fi
+[ ! -f "$failing_flock_root/.complete" ] || fail 'flock failure wrote a completion stamp'
+[ ! -f "$failing_flock_root/src/runtime/recovered.go" ] || fail 'flock failure extracted a toolchain'
 
 fake_bin="$tmp_dir/fake-bin"
 tar_log="$tmp_dir/tar.log"
@@ -154,6 +167,9 @@ for file in Makefile Makefile_CCU Makefile_HF Makefile_MultibandRadio Makefile_M
         fail "$file accepted a relative Makefile path from a whitespace-containing directory"
     fi
     grep -q 'Makefile paths do not support whitespace' "$tmp_dir/space-error" || fail "$file did not explain relative whitespace rejection"
+    if ! (cd "$space_project" && make -n -f "$make_dir/$file") >/dev/null 2>"$tmp_dir/space-error"; then
+        fail "$file rejected an absolute whitespace-free Makefile path from a whitespace-containing directory"
+    fi
 done
 
 grep -Fq '$$("$(GO126)" version)' "$make_dir/Makefile" || fail 'Go 1.26 version command is not quoted'

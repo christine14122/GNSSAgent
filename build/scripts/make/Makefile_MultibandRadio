@@ -1,11 +1,14 @@
 ifneq ($(words $(MAKEFILE_LIST)),1)
 $(error Makefile paths do not support whitespace)
 endif
+MAKEFILE_PATH := $(lastword $(MAKEFILE_LIST))
+ifeq ($(filter /%,$(MAKEFILE_PATH)),)
 ifneq ($(words $(CURDIR)),1)
 $(error Makefile paths do not support whitespace)
 endif
+endif
 
-MAKE_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
+MAKE_DIR := $(dir $(abspath $(MAKEFILE_PATH)))
 .DEFAULT_GOAL := multiband-radio
 .PHONY: multiband-radio
 
