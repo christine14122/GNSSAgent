@@ -112,6 +112,12 @@ run_make "$partial_root" "$tmp_dir/unused123" go126
 [ -f "$partial_root/src/runtime/recovered.go" ] || fail 'partial cache was not re-extracted'
 [ -f "$partial_root/.complete" ] || fail 'toolchain completion stamp was not written'
 
+stale_lock_root="$tmp_dir/stale-lock"
+: > "$stale_lock_root.lock"
+if ! timeout 2 make -f "$make_dir/Makefile" GO126_ARCHIVE="$archive126" GO126_SHA256="$sha126" GO126_ROOT="$stale_lock_root" go126 >/dev/null 2>&1; then
+    fail 'an inert lock file blocked toolchain preparation'
+fi
+
 fake_bin="$tmp_dir/fake-bin"
 tar_log="$tmp_dir/tar.log"
 mkdir -p "$fake_bin"
@@ -143,7 +149,11 @@ for file in Makefile Makefile_CCU Makefile_HF Makefile_MultibandRadio Makefile_M
     if make -n -f "$space_make_dir/$file" >/dev/null 2>"$tmp_dir/space-error"; then
         fail "$file accepted a whitespace-containing path"
     fi
-    grep -q 'Makefile paths cannot contain whitespace' "$tmp_dir/space-error" || fail "$file did not explain whitespace rejection"
+    grep -q 'Makefile paths do not support whitespace' "$tmp_dir/space-error" || fail "$file did not explain whitespace rejection"
+    if (cd "$space_project" && make -n -f "build/scripts/make/$file") >/dev/null 2>"$tmp_dir/space-error"; then
+        fail "$file accepted a relative Makefile path from a whitespace-containing directory"
+    fi
+    grep -q 'Makefile paths do not support whitespace' "$tmp_dir/space-error" || fail "$file did not explain relative whitespace rejection"
 done
 
 grep -Fq '$$("$(GO126)" version)' "$make_dir/Makefile" || fail 'Go 1.26 version command is not quoted'

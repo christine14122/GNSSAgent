@@ -1,5 +1,8 @@
 ifneq ($(words $(MAKEFILE_LIST)),1)
-$(error Makefile paths cannot contain whitespace)
+$(error Makefile paths do not support whitespace)
+endif
+ifneq ($(words $(CURDIR)),1)
+$(error Makefile paths do not support whitespace)
 endif
 
 MAKE_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))

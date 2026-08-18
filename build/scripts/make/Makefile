@@ -1,7 +1,10 @@
 SHELL := /bin/sh
 
 ifneq ($(words $(MAKEFILE_LIST)),1)
-$(error Makefile paths cannot contain whitespace)
+$(error Makefile paths do not support whitespace)
+endif
+ifneq ($(words $(CURDIR)),1)
+$(error Makefile paths do not support whitespace)
 endif
 
 MAKE_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
@@ -65,7 +68,7 @@ go126:
 
 	printf '%s  %s\n' "$(GO126_SHA256)" "$(GO126_ARCHIVE)" | sha256sum -c -
 
-	@lock="$(GO126_ROOT).lock"; retries=0; while ! mkdir "$$lock" 2>/dev/null; do retries=$$((retries + 1)); if [ "$$retries" -ge 60 ]; then echo "Timed out waiting for $$lock" >&2; exit 1; fi; sleep 1; done; trap 'rmdir "$$lock"' EXIT HUP INT TERM; if [ ! -f "$(GO126_STAMP)" ] || [ ! -x "$(GO126)" ] || [ ! -f "$(GO126_SENTINEL)" ]; then rm -f "$(GO126_STAMP)"; mkdir -p "$(GO126_ROOT)" && tar -xzf "$(GO126_ARCHIVE)" -C "$(GO126_ROOT)" --strip-components=1 || exit 1; fi; test "$$("$(GO126)" version)" = "go version go1.26.4 linux/amd64" || exit 1; touch "$(GO126_STAMP)"
+	@command -v flock >/dev/null 2>&1 || { echo "flock is required to prepare Go toolchains" >&2; exit 1; }; exec 9>"$(GO126_ROOT).lock"; flock 9; if [ ! -f "$(GO126_STAMP)" ] || [ ! -x "$(GO126)" ] || [ ! -f "$(GO126_SENTINEL)" ]; then rm -f "$(GO126_STAMP)"; mkdir -p "$(GO126_ROOT)" && tar -xzf "$(GO126_ARCHIVE)" -C "$(GO126_ROOT)" --strip-components=1 || exit 1; fi; test "$$("$(GO126)" version)" = "go version go1.26.4 linux/amd64" || exit 1; touch "$(GO126_STAMP)"
 
 go123:
 
@@ -73,7 +76,7 @@ go123:
 
 	printf '%s  %s\n' "$(GO123_SHA256)" "$(GO123_ARCHIVE)" | sha256sum -c -
 
-	@lock="$(GO123_ROOT).lock"; retries=0; while ! mkdir "$$lock" 2>/dev/null; do retries=$$((retries + 1)); if [ "$$retries" -ge 60 ]; then echo "Timed out waiting for $$lock" >&2; exit 1; fi; sleep 1; done; trap 'rmdir "$$lock"' EXIT HUP INT TERM; if [ ! -f "$(GO123_STAMP)" ] || [ ! -x "$(GO123)" ] || [ ! -f "$(GO123_SENTINEL)" ]; then rm -f "$(GO123_STAMP)"; mkdir -p "$(GO123_ROOT)" && tar -xzf "$(GO123_ARCHIVE)" -C "$(GO123_ROOT)" --strip-components=1 || exit 1; fi; test "$$("$(GO123)" version)" = "go version go1.23.12 linux/amd64" || exit 1; touch "$(GO123_STAMP)"
+	@command -v flock >/dev/null 2>&1 || { echo "flock is required to prepare Go toolchains" >&2; exit 1; }; exec 9>"$(GO123_ROOT).lock"; flock 9; if [ ! -f "$(GO123_STAMP)" ] || [ ! -x "$(GO123)" ] || [ ! -f "$(GO123_SENTINEL)" ]; then rm -f "$(GO123_STAMP)"; mkdir -p "$(GO123_ROOT)" && tar -xzf "$(GO123_ARCHIVE)" -C "$(GO123_ROOT)" --strip-components=1 || exit 1; fi; test "$$("$(GO123)" version)" = "go version go1.23.12 linux/amd64" || exit 1; touch "$(GO123_STAMP)"
 
 clean:
 
