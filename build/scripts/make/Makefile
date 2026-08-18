@@ -79,7 +79,7 @@ define RUN_HF_ONCE
 endef
 
 .DEFAULT_GOAL := all
-.PHONY: all test build ccu hf multiband-radio multiband-handheld go126 go123 clean
+.PHONY: all test build ccu hf multiband-radio multiband-handheld go126 go123 clean install
 
 all: test
 
@@ -126,6 +126,8 @@ go123:
 	printf '%s  %s\n' "$(GO123_SHA256)" "$(GO123_ARCHIVE)" | sha256sum -c -
 
 	@command -v flock >/dev/null 2>&1 || { echo "flock is required to prepare Go 1.23.12" >&2; exit 1; }; mkdir -p "$(GO123_ROOT)" || { echo "Unable to create Go 1.23.12 toolchain directory" >&2; exit 1; }; exec 9>"$(GO123_ROOT)/.prepare.lock" || { echo "Unable to open Go 1.23.12 toolchain lock" >&2; exit 1; }; flock 9 || { echo "Unable to acquire Go 1.23.12 toolchain lock" >&2; exit 1; }; if [ ! -f "$(GO123_STAMP)" ] || [ ! -x "$(GO123)" ] || [ ! -f "$(GO123_SENTINEL)" ]; then rm -f "$(GO123_STAMP)"; tar -xzf "$(GO123_ARCHIVE)" -C "$(GO123_ROOT)" --strip-components=1 || exit 1; fi; version="$$("$(GO123)" version)" || { echo "Unable to run Go 1.23.12 executable: $(GO123)" >&2; rm -f "$(GO123_STAMP)"; exit 1; }; if [ "$$version" != "go version go1.23.12 linux/amd64" ]; then echo "Expected go version go1.23.12 linux/amd64, got: $$version ($(GO123))" >&2; rm -f "$(GO123_STAMP)"; exit 1; fi; touch "$(GO123_STAMP)"
+
+install:
 
 clean:
 

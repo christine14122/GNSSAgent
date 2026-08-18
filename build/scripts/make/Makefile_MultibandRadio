@@ -9,9 +9,19 @@ endif
 endif
 
 MAKE_DIR := $(dir $(abspath $(MAKEFILE_PATH)))
-.DEFAULT_GOAL := multiband-radio
-.PHONY: multiband-radio
+PROJECT_ROOT := $(abspath $(MAKE_DIR)/../../..)
+DIST_DIR := $(PROJECT_ROOT)/build/dist/bin
+.DEFAULT_GOAL := all
+.PHONY: all multiband-radio clean install
+
+all: multiband-radio
 
 multiband-radio:
 
 	$(MAKE) --no-print-directory -f "$(MAKE_DIR)/Makefile" multiband-radio
+
+clean:
+
+	rm -f "$(DIST_DIR)/GNSSAgent-MultibandRadio"
+
+install:

@@ -9,9 +9,19 @@ endif
 endif
 
 MAKE_DIR := $(dir $(abspath $(MAKEFILE_PATH)))
-.DEFAULT_GOAL := hf
-.PHONY: hf
+PROJECT_ROOT := $(abspath $(MAKE_DIR)/../../..)
+DIST_DIR := $(PROJECT_ROOT)/build/dist/bin
+.DEFAULT_GOAL := all
+.PHONY: all hf clean install
+
+all: hf
 
 hf:
 
 	$(MAKE) --no-print-directory -f "$(MAKE_DIR)/Makefile" hf
+
+clean:
+
+	rm -f "$(DIST_DIR)/GNSSAgent-HF"
+
+install:

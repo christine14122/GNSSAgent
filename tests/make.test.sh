@@ -52,9 +52,51 @@ for wrapper_target in ccu hf multiband-radio multiband-handheld; do
         multiband-radio) wrapper=Makefile_MultibandRadio ;;
         multiband-handheld) wrapper=Makefile_MultibandHandheld ;;
     esac
-    output=$(cd "$outside_dir" && make -n -f "$make_dir/$wrapper")
+    output=$(cd "$outside_dir" && make -n -f "$make_dir/$wrapper" all)
     require_contains "$output" " $wrapper_target" "$wrapper wrapper"
     require_contains "$output" "gnssagent/internal/buildinfo.Target=$wrapper_target" "$wrapper wrapper"
+    output=$(cd "$outside_dir" && make -n -f "$make_dir/$wrapper")
+    require_contains "$output" " $wrapper_target" "$wrapper default goal"
+done
+
+for makefile in Makefile Makefile_CCU Makefile_HF Makefile_MultibandRadio Makefile_MultibandHandheld; do
+    make -f "$make_dir/$makefile" install >/dev/null
+    [ ! -e "$project_dir/build/dist" ] || fail "$makefile install changed the output directory"
+done
+
+artifact_names='GNSSAgent-CCU GNSSAgent-MultibandRadio GNSSAgent-MultibandHandheld GNSSAgent-HF'
+dist_dir="$project_dir/build/dist/bin"
+
+reset_artifacts() {
+    mkdir -p "$dist_dir"
+    for name in $artifact_names; do
+        : > "$dist_dir/$name"
+    done
+}
+
+assert_wrapper_clean() {
+    wrapper=$1
+    removed=$2
+    reset_artifacts
+    make -f "$make_dir/$wrapper" clean >/dev/null
+    for name in $artifact_names; do
+        if [ "$name" = "$removed" ]; then
+            [ ! -e "$dist_dir/$name" ] || fail "$wrapper clean kept $name"
+        else
+            [ -f "$dist_dir/$name" ] || fail "$wrapper clean removed unrelated $name"
+        fi
+    done
+}
+
+assert_wrapper_clean Makefile_CCU GNSSAgent-CCU
+assert_wrapper_clean Makefile_MultibandRadio GNSSAgent-MultibandRadio
+assert_wrapper_clean Makefile_MultibandHandheld GNSSAgent-MultibandHandheld
+assert_wrapper_clean Makefile_HF GNSSAgent-HF
+
+reset_artifacts
+make -f "$make_dir/Makefile" clean >/dev/null
+for name in $artifact_names; do
+    [ ! -e "$dist_dir/$name" ] || fail "primary clean kept $name"
 done
 
 make_archive() {
