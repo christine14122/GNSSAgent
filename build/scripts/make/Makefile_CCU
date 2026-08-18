@@ -1,0 +1,7 @@
+MAKE_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
+.DEFAULT_GOAL := ccu
+.PHONY: ccu
+
+ccu:
+
+	$(MAKE) --no-print-directory -f "$(MAKE_DIR)/Makefile" ccu

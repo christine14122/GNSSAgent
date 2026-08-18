@@ -3,7 +3,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$projectRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+$projectRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
 $compilerArchive = Join-Path $projectRoot "build\compiler\go1.25.5.windows-amd64.zip"
 $compilerRoot = Join-Path $projectRoot "build\compiler\.go1.25.5"
 $goExe = Join-Path $compilerRoot "go\bin\go.exe"

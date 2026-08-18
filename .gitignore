@@ -2,6 +2,7 @@
 /build/dist/
 /build/compiler/.go*/
 /build/compiler/*.zip
+/build/compiler/*.tar.gz
 *.test
 *.out
 coverage.txt

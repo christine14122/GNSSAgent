@@ -1,0 +1,7 @@
+MAKE_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
+.DEFAULT_GOAL := multiband-radio
+.PHONY: multiband-radio
+
+multiband-radio:
+
+	$(MAKE) --no-print-directory -f "$(MAKE_DIR)/Makefile" multiband-radio

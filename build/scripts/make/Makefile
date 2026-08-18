@@ -1,0 +1,82 @@
+SHELL := /bin/sh
+
+MAKE_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
+PROJECT_ROOT := $(abspath $(MAKE_DIR)/../../..)
+COMPILER_DIR := $(PROJECT_ROOT)/build/compiler
+DIST_DIR := $(PROJECT_ROOT)/build/dist/bin
+MAIN_PACKAGE := ./cmd/gnssagent
+BUILD_FLAGS := -trimpath -buildvcs=false
+LINK_FLAGS := -s -w
+
+GO126_ARCHIVE := $(COMPILER_DIR)/go1.26.4.linux-amd64.tar.gz
+GO126_SHA256 := 1153d3d50e0ac764b447adfe05c2bcf08e889d42a02e0fe0259bd47f6733ad7f
+GO126_ROOT := $(COMPILER_DIR)/.go1.26.4-linux-amd64
+GO126 := $(GO126_ROOT)/bin/go
+GO126_SENTINEL := $(GO126_ROOT)/src/errors/errors.go
+
+GO123_ARCHIVE := $(COMPILER_DIR)/go1.23.12.linux-amd64.tar.gz
+GO123_SHA256 := d3847fef834e9db11bf64e3fb34db9c04db14e068eeb064f49af747010454f90
+GO123_ROOT := $(COMPILER_DIR)/.go1.23.12-linux-amd64
+GO123 := $(GO123_ROOT)/bin/go
+GO123_SENTINEL := $(GO123_ROOT)/src/errors/errors.go
+
+.DEFAULT_GOAL := all
+.PHONY: all test build ccu hf multiband-radio multiband-handheld go126 go123 clean
+
+all: test build
+
+test: go126
+
+	cd "$(PROJECT_ROOT)" && GOTOOLCHAIN=local GOROOT="$(GO126_ROOT)" "$(GO126)" test ./...
+
+build: ccu multiband-radio multiband-handheld hf
+
+ccu: go126 | $(DIST_DIR)
+
+	cd "$(PROJECT_ROOT)" && GOTOOLCHAIN=local GOROOT="$(GO126_ROOT)" CGO_ENABLED=0 GOOS=linux GOARCH=amd64 "$(GO126)" build $(BUILD_FLAGS) -ldflags "$(LINK_FLAGS) -X gnssagent/internal/buildinfo.Target=ccu" -o "$(DIST_DIR)/GNSSAgent-CCU" $(MAIN_PACKAGE)
+
+multiband-radio: go126 | $(DIST_DIR)
+
+	cd "$(PROJECT_ROOT)" && GOTOOLCHAIN=local GOROOT="$(GO126_ROOT)" CGO_ENABLED=0 GOOS=linux GOARCH=arm64 GOARM64=v8.0 "$(GO126)" build $(BUILD_FLAGS) -ldflags "$(LINK_FLAGS) -X gnssagent/internal/buildinfo.Target=multiband-radio" -o "$(DIST_DIR)/GNSSAgent-MultibandRadio" $(MAIN_PACKAGE)
+
+multiband-handheld: go126 | $(DIST_DIR)
+
+	cd "$(PROJECT_ROOT)" && GOTOOLCHAIN=local GOROOT="$(GO126_ROOT)" CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 "$(GO126)" build $(BUILD_FLAGS) -ldflags "$(LINK_FLAGS) -X gnssagent/internal/buildinfo.Target=multiband-handheld" -o "$(DIST_DIR)/GNSSAgent-MultibandHandheld" $(MAIN_PACKAGE)
+
+hf: go123 | $(DIST_DIR)
+
+	cd "$(PROJECT_ROOT)" && GOTOOLCHAIN=local GOROOT="$(GO123_ROOT)" CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 "$(GO123)" build $(BUILD_FLAGS) -ldflags "$(LINK_FLAGS) -X gnssagent/internal/buildinfo.Target=hf" -o "$(DIST_DIR)/GNSSAgent-HF" $(MAIN_PACKAGE)
+
+$(DIST_DIR):
+
+	mkdir -p "$(DIST_DIR)"
+
+go126:
+
+	test -f "$(GO126_ARCHIVE)"
+
+	printf '%s  %s\n' "$(GO126_SHA256)" "$(GO126_ARCHIVE)" | sha256sum -c -
+
+	if [ ! -x "$(GO126)" ] || [ ! -f "$(GO126_SENTINEL)" ]; then mkdir -p "$(GO126_ROOT)" && tar -xzf "$(GO126_ARCHIVE)" -C "$(GO126_ROOT)" --strip-components=1; fi
+
+	test "$$($(GO126) version)" = "go version go1.26.4 linux/amd64"
+
+go123:
+
+	test -f "$(GO123_ARCHIVE)"
+
+	printf '%s  %s\n' "$(GO123_SHA256)" "$(GO123_ARCHIVE)" | sha256sum -c -
+
+	if [ ! -x "$(GO123)" ] || [ ! -f "$(GO123_SENTINEL)" ]; then mkdir -p "$(GO123_ROOT)" && tar -xzf "$(GO123_ARCHIVE)" -C "$(GO123_ROOT)" --strip-components=1; fi
+
+	test "$$($(GO123) version)" = "go version go1.23.12 linux/amd64"
+
+clean:
+
+	rm -f "$(DIST_DIR)/GNSSAgent-CCU"
+
+	rm -f "$(DIST_DIR)/GNSSAgent-MultibandRadio"
+
+	rm -f "$(DIST_DIR)/GNSSAgent-MultibandHandheld"
+
+	rm -f "$(DIST_DIR)/GNSSAgent-HF"
