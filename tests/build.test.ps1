@@ -4,20 +4,33 @@ $powerShellDirectory = Join-Path $projectRoot "build\scripts\powershell"
 $makeDirectory = Join-Path $projectRoot "build\scripts\make"
 $mainScript = Join-Path $powerShellDirectory "build.ps1"
 $hfScript = Join-Path $powerShellDirectory "build-hf.ps1"
-$primaryMakefile = Join-Path $makeDirectory "Makefile"
+$primaryMakefile = Join-Path $makeDirectory "makefile"
 
 foreach ($path in @(
     $mainScript,
     $hfScript,
     (Join-Path $powerShellDirectory "build.bat"),
     $primaryMakefile,
-    (Join-Path $makeDirectory "Makefile_CCU"),
-    (Join-Path $makeDirectory "Makefile_HF"),
-    (Join-Path $makeDirectory "Makefile_MultibandRadio"),
-    (Join-Path $makeDirectory "Makefile_MultibandHandheld")
+    (Join-Path $makeDirectory "makefile_CCU"),
+    (Join-Path $makeDirectory "makefile_HF"),
+    (Join-Path $makeDirectory "makefile_MultibandRadio"),
+    (Join-Path $makeDirectory "makefile_MultibandHandheld")
 )) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
         throw "Required build script is missing: $path"
+    }
+}
+
+$actualMakefileNames = @(Get-ChildItem -LiteralPath $makeDirectory -File | Select-Object -ExpandProperty Name)
+foreach ($expectedName in @(
+    "makefile",
+    "makefile_CCU",
+    "makefile_HF",
+    "makefile_MultibandRadio",
+    "makefile_MultibandHandheld"
+)) {
+    if (-not ($actualMakefileNames -ccontains $expectedName)) {
+        throw "Required Makefile has incorrect filename casing: $expectedName"
     }
 }
 
@@ -90,13 +103,13 @@ foreach ($text in @(
 }
 
 foreach ($wrapper in @(
-    @{ Path = "Makefile_CCU"; Target = "ccu" },
-    @{ Path = "Makefile_HF"; Target = "hf" },
-    @{ Path = "Makefile_MultibandRadio"; Target = "multiband-radio" },
-    @{ Path = "Makefile_MultibandHandheld"; Target = "multiband-handheld" }
+    @{ Path = "makefile_CCU"; Target = "ccu" },
+    @{ Path = "makefile_HF"; Target = "hf" },
+    @{ Path = "makefile_MultibandRadio"; Target = "multiband-radio" },
+    @{ Path = "makefile_MultibandHandheld"; Target = "multiband-handheld" }
 )) {
     $content = Get-Content -LiteralPath (Join-Path $makeDirectory $wrapper.Path) -Raw
-    if (-not $content.Contains('$(MAKE_DIR)/Makefile') -or -not $content.Contains($wrapper.Target)) {
+    if (-not $content.Contains('$(MAKE_DIR)/makefile') -or -not $content.Contains($wrapper.Target)) {
         throw "$($wrapper.Path) does not delegate to $($wrapper.Target) through the primary Makefile"
     }
 }

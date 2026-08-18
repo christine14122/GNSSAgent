@@ -18,7 +18,7 @@ all: multiband-handheld
 
 multiband-handheld:
 
-	$(MAKE) --no-print-directory -f "$(MAKE_DIR)/Makefile" multiband-handheld
+	$(MAKE) --no-print-directory -f "$(MAKE_DIR)/makefile" multiband-handheld
 
 clean:
 

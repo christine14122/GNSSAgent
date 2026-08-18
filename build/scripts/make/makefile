@@ -46,7 +46,7 @@ define RUN_WITH_GO126_FALLBACK
 	else \
 		echo "System Go not found; using bundled Go 1.26.4"; \
 	fi; \
-	"$(MAKE_RUNNER)" --no-print-directory -f "$(MAKE_DIR)/Makefile" go126 || exit $$?; \
+	"$(MAKE_RUNNER)" --no-print-directory -f "$(MAKE_DIR)/makefile" go126 || exit $$?; \
 	if cd "$(PROJECT_ROOT)" && GOTOOLCHAIN=local GOROOT="$(GO126_ROOT)" $(1) "$(GO126)" $(2); then \
 		exit 0; \
 	else \
@@ -71,7 +71,7 @@ define RUN_HF_ONCE
 		else \
 			echo "System Go not found; using bundled Go 1.23.12"; \
 		fi; \
-		"$(MAKE_RUNNER)" --no-print-directory -f "$(MAKE_DIR)/Makefile" go123 || exit $$?; \
+		"$(MAKE_RUNNER)" --no-print-directory -f "$(MAKE_DIR)/makefile" go123 || exit $$?; \
 		cd "$(PROJECT_ROOT)" && GOTOOLCHAIN=local GOROOT="$(GO123_ROOT)" CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 \
 			"$(GO123)" build $(BUILD_FLAGS) -ldflags "$(LINK_FLAGS) -X gnssagent/internal/buildinfo.Target=hf" \
 			-o "$(DIST_DIR)/GNSSAgent-HF" $(MAIN_PACKAGE); \
@@ -83,7 +83,7 @@ endef
 
 all: test
 
-	$(MAKE) --no-print-directory -f "$(MAKE_DIR)/Makefile" build
+	$(MAKE) --no-print-directory -f "$(MAKE_DIR)/makefile" build
 
 test:
 

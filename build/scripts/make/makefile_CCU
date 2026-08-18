@@ -12,16 +12,16 @@ MAKE_DIR := $(dir $(abspath $(MAKEFILE_PATH)))
 PROJECT_ROOT := $(abspath $(MAKE_DIR)/../../..)
 DIST_DIR := $(PROJECT_ROOT)/build/dist/bin
 .DEFAULT_GOAL := all
-.PHONY: all multiband-radio clean install
+.PHONY: all ccu clean install
 
-all: multiband-radio
+all: ccu
 
-multiband-radio:
+ccu:
 
-	$(MAKE) --no-print-directory -f "$(MAKE_DIR)/Makefile" multiband-radio
+	$(MAKE) --no-print-directory -f "$(MAKE_DIR)/makefile" ccu
 
 clean:
 
-	rm -f "$(DIST_DIR)/GNSSAgent-MultibandRadio"
+	rm -f "$(DIST_DIR)/GNSSAgent-CCU"
 
 install:

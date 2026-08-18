@@ -8,7 +8,7 @@ make_dir="$project_dir/build/scripts/make"
 outside_dir="$tmp_dir/outside"
 
 mkdir -p "$make_dir" "$outside_dir"
-for file in Makefile Makefile_CCU Makefile_HF Makefile_MultibandRadio Makefile_MultibandHandheld; do
+for file in makefile makefile_CCU makefile_HF makefile_MultibandRadio makefile_MultibandHandheld; do
     cp "$repo_dir/build/scripts/make/$file" "$make_dir/$file"
 done
 
@@ -27,7 +27,7 @@ require_contains() {
 dry_run() {
     (
         cd "$outside_dir"
-        make -n -f "$make_dir/Makefile" "$1"
+        make -n -f "$make_dir/makefile" "$1"
     )
 }
 
@@ -47,10 +47,10 @@ assert_target hf '.go1.23.12-linux-amd64' 'GOOS=linux GOARCH=arm GOARM=7' 'GNSSA
 
 for wrapper_target in ccu hf multiband-radio multiband-handheld; do
     case "$wrapper_target" in
-        ccu) wrapper=Makefile_CCU ;;
-        hf) wrapper=Makefile_HF ;;
-        multiband-radio) wrapper=Makefile_MultibandRadio ;;
-        multiband-handheld) wrapper=Makefile_MultibandHandheld ;;
+        ccu) wrapper=makefile_CCU ;;
+        hf) wrapper=makefile_HF ;;
+        multiband-radio) wrapper=makefile_MultibandRadio ;;
+        multiband-handheld) wrapper=makefile_MultibandHandheld ;;
     esac
     output=$(cd "$outside_dir" && make -n -f "$make_dir/$wrapper" all)
     require_contains "$output" " $wrapper_target" "$wrapper wrapper"
@@ -59,7 +59,7 @@ for wrapper_target in ccu hf multiband-radio multiband-handheld; do
     require_contains "$output" " $wrapper_target" "$wrapper default goal"
 done
 
-for makefile in Makefile Makefile_CCU Makefile_HF Makefile_MultibandRadio Makefile_MultibandHandheld; do
+for makefile in makefile makefile_CCU makefile_HF makefile_MultibandRadio makefile_MultibandHandheld; do
     make -f "$make_dir/$makefile" install >/dev/null
     [ ! -e "$project_dir/build/dist" ] || fail "$makefile install changed the output directory"
 done
@@ -88,13 +88,13 @@ assert_wrapper_clean() {
     done
 }
 
-assert_wrapper_clean Makefile_CCU GNSSAgent-CCU
-assert_wrapper_clean Makefile_MultibandRadio GNSSAgent-MultibandRadio
-assert_wrapper_clean Makefile_MultibandHandheld GNSSAgent-MultibandHandheld
-assert_wrapper_clean Makefile_HF GNSSAgent-HF
+assert_wrapper_clean makefile_CCU GNSSAgent-CCU
+assert_wrapper_clean makefile_MultibandRadio GNSSAgent-MultibandRadio
+assert_wrapper_clean makefile_MultibandHandheld GNSSAgent-MultibandHandheld
+assert_wrapper_clean makefile_HF GNSSAgent-HF
 
 reset_artifacts
-make -f "$make_dir/Makefile" clean >/dev/null
+make -f "$make_dir/makefile" clean >/dev/null
 for name in $artifact_names; do
     [ ! -e "$dist_dir/$name" ] || fail "primary clean kept $name"
 done
@@ -143,7 +143,7 @@ sha123=$(sha256sum "$archive123" | awk '{print $1}')
 run_make() {
     root126=$1 root123=$2
     shift 2
-    make -f "$make_dir/Makefile" \
+    make -f "$make_dir/makefile" \
         GO126_ARCHIVE="$archive126" GO126_SHA256="$sha126" GO126_ROOT="$root126" \
         GO123_ARCHIVE="$archive123" GO123_SHA256="$sha123" GO123_ROOT="$root123" "$@"
 }
@@ -155,7 +155,7 @@ make_system_go "$system_bin" go9.9.9
 
 : > "$system_log"
 FAKE_SYSTEM_LOG="$system_log" FAKE_SYSTEM_FAIL=0 \
-    make -f "$make_dir/Makefile" SYSTEM_GO="$system_bin/go" \
+    make -f "$make_dir/makefile" SYSTEM_GO="$system_bin/go" \
     GO126_ARCHIVE="$tmp_dir/not-needed.tar.gz" test
 [ "$(grep -c '^system-test$' "$system_log")" = 1 ] || fail 'system Go success did not run exactly once'
 
@@ -193,7 +193,7 @@ make_system_go "$hf_wrong_bin" go1.26.4
 
 : > "$system_log"
 FAKE_SYSTEM_LOG="$system_log" FAKE_SYSTEM_FAIL=0 \
-    make -f "$make_dir/Makefile" SYSTEM_GO="$hf_exact_bin/go" \
+    make -f "$make_dir/makefile" SYSTEM_GO="$hf_exact_bin/go" \
     GO123_ARCHIVE="$tmp_dir/not-needed-hf.tar.gz" hf
 [ "$(grep -c '^system-build$' "$system_log")" = 1 ] || fail 'HF exact system Go was not used once'
 
@@ -217,12 +217,12 @@ FAKE_EVENT_LOG="$bundled_log" run_make "$tmp_dir/hf-no-system126" "$tmp_dir/hf-n
 [ "$(grep -c '^bundled-build$' "$bundled_log")" = 1 ] || fail 'HF missing system Go did not select bundled Go'
 
 : > "$system_log"
-FAKE_SYSTEM_LOG="$system_log" make -n -f "$make_dir/Makefile" SYSTEM_GO="$system_bin/go" ccu >/dev/null
+FAKE_SYSTEM_LOG="$system_log" make -n -f "$make_dir/makefile" SYSTEM_GO="$system_bin/go" ccu >/dev/null
 [ ! -s "$system_log" ] || fail 'make -n executed a Go command'
 
 missing_archive="$tmp_dir/missing-go126.tar.gz"
 missing_root="$tmp_dir/missing-go126"
-if output=$(make -f "$make_dir/Makefile" GO126_ARCHIVE="$missing_archive" GO126_SHA256="$sha126" GO126_ROOT="$missing_root" go126 2>&1); then
+if output=$(make -f "$make_dir/makefile" GO126_ARCHIVE="$missing_archive" GO126_SHA256="$sha126" GO126_ROOT="$missing_root" go126 2>&1); then
     fail 'missing Go 1.26 archive was accepted'
 fi
 require_contains "$output" "$missing_archive" 'missing Go 1.26 archive diagnostic'
@@ -231,7 +231,7 @@ require_contains "$output" "$missing_archive" 'missing Go 1.26 archive diagnosti
 
 missing_archive123="$tmp_dir/missing-go123.tar.gz"
 missing_root123="$tmp_dir/missing-go123"
-if output=$(make -f "$make_dir/Makefile" GO123_ARCHIVE="$missing_archive123" GO123_SHA256="$sha123" GO123_ROOT="$missing_root123" go123 2>&1); then
+if output=$(make -f "$make_dir/makefile" GO123_ARCHIVE="$missing_archive123" GO123_SHA256="$sha123" GO123_ROOT="$missing_root123" go123 2>&1); then
     fail 'missing Go 1.23 archive was accepted'
 fi
 require_contains "$output" "$missing_archive123" 'missing Go 1.23 archive diagnostic'
@@ -255,7 +255,7 @@ fi
 bad_version_archive="$compiler_dir/fake-bad-version.tar.gz"
 make_archive "$bad_version_archive" go9.9.9
 bad_version_sha=$(sha256sum "$bad_version_archive" | awk '{print $1}')
-if make -f "$make_dir/Makefile" GO126_ARCHIVE="$bad_version_archive" GO126_SHA256="$bad_version_sha" GO126_ROOT="$tmp_dir/bad-version" go126 >/dev/null 2>&1; then
+if make -f "$make_dir/makefile" GO126_ARCHIVE="$bad_version_archive" GO126_SHA256="$bad_version_sha" GO126_ROOT="$tmp_dir/bad-version" go126 >/dev/null 2>&1; then
     fail 'wrong Go version was accepted'
 fi
 
@@ -295,7 +295,7 @@ stale_lock_root="$tmp_dir/stale-lock"
 mkdir -p "$stale_lock_root"
 : > "$stale_lock_root.lock"
 : > "$stale_lock_root/.prepare.lock"
-if ! timeout 2 make -f "$make_dir/Makefile" GO126_ARCHIVE="$archive126" GO126_SHA256="$sha126" GO126_ROOT="$stale_lock_root" go126 >/dev/null 2>&1; then
+if ! timeout 2 make -f "$make_dir/makefile" GO126_ARCHIVE="$archive126" GO126_SHA256="$sha126" GO126_ROOT="$stale_lock_root" go126 >/dev/null 2>&1; then
     fail 'an inert lock file blocked toolchain preparation'
 fi
 
@@ -336,7 +336,7 @@ fi
 space_project="$tmp_dir/project with spaces"
 space_make_dir="$space_project/build/scripts/make"
 mkdir -p "$space_make_dir"
-for file in Makefile Makefile_CCU Makefile_HF Makefile_MultibandRadio Makefile_MultibandHandheld; do
+for file in makefile makefile_CCU makefile_HF makefile_MultibandRadio makefile_MultibandHandheld; do
     cp "$make_dir/$file" "$space_make_dir/$file"
     if make -n -f "$space_make_dir/$file" >/dev/null 2>"$tmp_dir/space-error"; then
         fail "$file accepted a whitespace-containing path"
@@ -351,7 +351,7 @@ for file in Makefile Makefile_CCU Makefile_HF Makefile_MultibandRadio Makefile_M
     fi
 done
 
-grep -Fq '$$("$(GO126)" version)' "$make_dir/Makefile" || fail 'Go 1.26 version command is not quoted'
-grep -Fq '$$("$(GO123)" version)' "$make_dir/Makefile" || fail 'Go 1.23 version command is not quoted'
+grep -Fq '$$("$(GO126)" version)' "$make_dir/makefile" || fail 'Go 1.26 version command is not quoted'
+grep -Fq '$$("$(GO123)" version)' "$make_dir/makefile" || fail 'Go 1.23 version command is not quoted'
 
 printf '%s\n' 'GNSSAgent Make behavior passed.'
