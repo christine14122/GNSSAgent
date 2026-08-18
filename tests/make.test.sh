@@ -93,9 +93,37 @@ run_make() {
         GO123_ARCHIVE="$archive123" GO123_SHA256="$sha123" GO123_ROOT="$root123" "$@"
 }
 
-if run_make "$tmp_dir/bad-sha" "$tmp_dir/unused123" GO126_SHA256=bad go126 >/dev/null 2>&1; then
-    fail 'checksum mismatch was accepted'
+missing_archive="$tmp_dir/missing-go126.tar.gz"
+missing_root="$tmp_dir/missing-go126"
+if output=$(make -f "$make_dir/Makefile" GO126_ARCHIVE="$missing_archive" GO126_SHA256="$sha126" GO126_ROOT="$missing_root" go126 2>&1); then
+    fail 'missing Go 1.26 archive was accepted'
 fi
+require_contains "$output" "$missing_archive" 'missing Go 1.26 archive diagnostic'
+[ ! -f "$missing_root/.complete" ] || fail 'missing Go 1.26 archive wrote a completion stamp'
+[ ! -f "$missing_root/src/runtime/recovered.go" ] || fail 'missing Go 1.26 archive extracted a toolchain'
+
+missing_archive123="$tmp_dir/missing-go123.tar.gz"
+missing_root123="$tmp_dir/missing-go123"
+if output=$(make -f "$make_dir/Makefile" GO123_ARCHIVE="$missing_archive123" GO123_SHA256="$sha123" GO123_ROOT="$missing_root123" go123 2>&1); then
+    fail 'missing Go 1.23 archive was accepted'
+fi
+require_contains "$output" "$missing_archive123" 'missing Go 1.23 archive diagnostic'
+[ ! -f "$missing_root123/.complete" ] || fail 'missing Go 1.23 archive wrote a completion stamp'
+[ ! -f "$missing_root123/src/runtime/recovered.go" ] || fail 'missing Go 1.23 archive extracted a toolchain'
+
+wrong_sha=0000000000000000000000000000000000000000000000000000000000000000
+wrong_sha_root="$tmp_dir/wrong-sha"
+if run_make "$wrong_sha_root" "$tmp_dir/unused123" GO126_SHA256="$wrong_sha" go126 >/dev/null 2>&1; then
+    fail 'valid wrong Go 1.26 checksum was accepted'
+fi
+[ ! -f "$wrong_sha_root/.complete" ] || fail 'wrong Go 1.26 checksum wrote a completion stamp'
+[ ! -f "$wrong_sha_root/src/runtime/recovered.go" ] || fail 'wrong Go 1.26 checksum extracted a toolchain'
+wrong_sha_root123="$tmp_dir/wrong-sha123"
+if run_make "$tmp_dir/unused126" "$wrong_sha_root123" GO123_SHA256="$wrong_sha" go123 >/dev/null 2>&1; then
+    fail 'valid wrong Go 1.23 checksum was accepted'
+fi
+[ ! -f "$wrong_sha_root123/.complete" ] || fail 'wrong Go 1.23 checksum wrote a completion stamp'
+[ ! -f "$wrong_sha_root123/src/runtime/recovered.go" ] || fail 'wrong Go 1.23 checksum extracted a toolchain'
 
 bad_version_archive="$compiler_dir/fake-bad-version.tar.gz"
 make_archive "$bad_version_archive" go9.9.9
@@ -111,6 +139,30 @@ cp "$tmp_dir/stage-go1.26.4/go/src/errors/errors.go" "$partial_root/src/errors/e
 run_make "$partial_root" "$tmp_dir/unused123" go126
 [ -f "$partial_root/src/runtime/recovered.go" ] || fail 'partial cache was not re-extracted'
 [ -f "$partial_root/.complete" ] || fail 'toolchain completion stamp was not written'
+
+recovery_root="$tmp_dir/stamp-recovery"
+run_make "$recovery_root" "$tmp_dir/unused123" go126
+printf '%s\n' '#!/bin/sh' "printf '%s\\n' 'go version go9.9.9 linux/amd64'" > "$recovery_root/bin/go"
+chmod +x "$recovery_root/bin/go"
+if output=$(run_make "$recovery_root" "$tmp_dir/unused123" go126 2>&1); then
+    fail 'corrupted stamped Go 1.26 toolchain was accepted'
+fi
+require_contains "$output" 'Expected go version go1.26.4 linux/amd64, got: go version go9.9.9 linux/amd64' 'Go 1.26 version diagnostic'
+[ ! -f "$recovery_root/.complete" ] || fail 'corrupted Go 1.26 toolchain retained its completion stamp'
+run_make "$recovery_root" "$tmp_dir/unused123" go126
+[ -f "$recovery_root/.complete" ] || fail 'recovered Go 1.26 toolchain did not recreate its completion stamp'
+
+recovery_root123="$tmp_dir/stamp-recovery123"
+run_make "$tmp_dir/unused126" "$recovery_root123" go123
+printf '%s\n' '#!/bin/sh' "printf '%s\\n' 'go version go9.9.9 linux/amd64'" > "$recovery_root123/bin/go"
+chmod +x "$recovery_root123/bin/go"
+if output=$(run_make "$tmp_dir/unused126" "$recovery_root123" go123 2>&1); then
+    fail 'corrupted stamped Go 1.23 toolchain was accepted'
+fi
+require_contains "$output" 'Expected go version go1.23.12 linux/amd64, got: go version go9.9.9 linux/amd64' 'Go 1.23 version diagnostic'
+[ ! -f "$recovery_root123/.complete" ] || fail 'corrupted Go 1.23 toolchain retained its completion stamp'
+run_make "$tmp_dir/unused126" "$recovery_root123" go123
+[ -f "$recovery_root123/.complete" ] || fail 'recovered Go 1.23 toolchain did not recreate its completion stamp'
 
 stale_lock_root="$tmp_dir/stale-lock"
 mkdir -p "$stale_lock_root"
