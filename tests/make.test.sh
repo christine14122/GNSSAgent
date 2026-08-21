@@ -46,6 +46,10 @@ assert_target multiband-handheld '.go1.26.4-linux-amd64' 'GOOS=linux GOARCH=arm 
 assert_target small-radio '.go1.26.4-linux-amd64' 'GOOS=linux GOARCH=mipsle GOMIPS=hardfloat' 'GNSSAgent-SmallRadio' small-radio
 assert_target hf '.go1.23.12-linux-amd64' 'GOOS=linux GOARCH=arm GOARM=7' 'GNSSAgent-HF' hf
 
+output=$(dry_run all)
+require_contains "$output" 'GNSSAgent-SmallRadio' 'primary all dry run'
+require_contains "$output" 'GOMIPS=hardfloat' 'primary all dry run'
+
 for wrapper_target in ccu hf multiband-radio multiband-handheld small-radio; do
     case "$wrapper_target" in
         ccu) wrapper=makefile_CCU ;;

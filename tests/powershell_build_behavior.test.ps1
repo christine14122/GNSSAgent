@@ -26,6 +26,7 @@ if "%1"=="build" (
   echo %1>>"%FAKE_GO_LOG%"
 )
 if "%FAKE_GO_FAIL%"=="%1" exit /b 1
+if "%FAKE_GO_FAIL%"=="smallradio" if "%1"=="build" if "%GOARCH%"=="mipsle" exit /b 1
 exit /b 0
 '@ | Set-Content -LiteralPath (Join-Path $fakeBin "go.cmd") -Encoding ASCII
 
@@ -84,6 +85,17 @@ try {
     Assert-Equal $calls.Count 2 "Ordinary failure retried or continued after the first failed build"
     Assert-Equal $calls[0] "test" "Ordinary failure did not test first"
     Assert-Equal $calls[1] "build" "Ordinary failure did not stop on the first build"
+
+    Clear-Content -LiteralPath $fakeLog
+    $env:FAKE_GO_FAIL = "smallradio"
+    $env:GOMIPS = "failure-sentinel"
+    Invoke-ExpectedFailure {
+        & (Join-Path $fixtureDirectory "build.ps1") -OutputDirectory (Join-Path $temporaryRoot "smallradio-failure")
+    } "GNSSAgent-SmallRadio cross-compilation failed"
+    $calls = @(Get-Content -LiteralPath $fakeLog)
+    Assert-Equal $calls.Count 5 "SmallRadio failure did not reach the fourth build exactly once"
+    Assert-Equal (@($calls | Where-Object { $_ -eq "smallradio:hardfloat" }).Count) 1 "SmallRadio failure did not use hard-float MIPS"
+    Assert-Equal $env:GOMIPS "failure-sentinel" "SmallRadio failure did not restore the caller GOMIPS value"
 
     Clear-Content -LiteralPath $fakeLog
     $env:FAKE_GO_VERSION = "go1.23.12"

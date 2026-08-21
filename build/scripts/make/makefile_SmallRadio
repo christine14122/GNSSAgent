@@ -1,0 +1,27 @@
+ifneq ($(words $(MAKEFILE_LIST)),1)
+$(error Makefile paths do not support whitespace)
+endif
+MAKEFILE_PATH := $(lastword $(MAKEFILE_LIST))
+ifeq ($(filter /%,$(MAKEFILE_PATH)),)
+ifneq ($(words $(CURDIR)),1)
+$(error Makefile paths do not support whitespace)
+endif
+endif
+
+MAKE_DIR := $(dir $(abspath $(MAKEFILE_PATH)))
+PROJECT_ROOT := $(abspath $(MAKE_DIR)/../../..)
+DIST_DIR := $(PROJECT_ROOT)/build/dist/bin
+.DEFAULT_GOAL := all
+.PHONY: all small-radio clean install
+
+all: small-radio
+
+small-radio:
+
+	$(MAKE) --no-print-directory -f "$(MAKE_DIR)/makefile" small-radio
+
+clean:
+
+	rm -f "$(DIST_DIR)/GNSSAgent-SmallRadio"
+
+install:

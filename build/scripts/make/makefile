@@ -79,7 +79,7 @@ define RUN_HF_ONCE
 endef
 
 .DEFAULT_GOAL := all
-.PHONY: all test build ccu hf multiband-radio multiband-handheld go126 go123 clean install
+.PHONY: all test build ccu hf multiband-radio multiband-handheld small-radio go126 go123 clean install
 
 all: test
 
@@ -89,7 +89,7 @@ test:
 
 	$(call RUN_WITH_GO126_FALLBACK,,test ./...)
 
-build: ccu multiband-radio multiband-handheld hf
+build: ccu multiband-radio multiband-handheld small-radio hf
 
 ccu: | $(DIST_DIR)
 
@@ -102,6 +102,10 @@ multiband-radio: | $(DIST_DIR)
 multiband-handheld: | $(DIST_DIR)
 
 	$(call RUN_WITH_GO126_FALLBACK,CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7,build $(BUILD_FLAGS) -ldflags "$(LINK_FLAGS) -X gnssagent/internal/buildinfo.Target=multiband-handheld" -o "$(DIST_DIR)/GNSSAgent-MultibandHandheld" $(MAIN_PACKAGE))
+
+small-radio: | $(DIST_DIR)
+
+	$(call RUN_WITH_GO126_FALLBACK,CGO_ENABLED=0 GOOS=linux GOARCH=mipsle GOMIPS=hardfloat,build $(BUILD_FLAGS) -ldflags "$(LINK_FLAGS) -X gnssagent/internal/buildinfo.Target=small-radio" -o "$(DIST_DIR)/GNSSAgent-SmallRadio" $(MAIN_PACKAGE))
 
 hf: | $(DIST_DIR)
 
@@ -136,5 +140,7 @@ clean:
 	rm -f "$(DIST_DIR)/GNSSAgent-MultibandRadio"
 
 	rm -f "$(DIST_DIR)/GNSSAgent-MultibandHandheld"
+
+	rm -f "$(DIST_DIR)/GNSSAgent-SmallRadio"
 
 	rm -f "$(DIST_DIR)/GNSSAgent-HF"

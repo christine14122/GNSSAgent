@@ -54,6 +54,7 @@ $required = @(
     '-GOARCH "mipsle"',
     '-GOMIPS "hardfloat"',
     '-Target "small-radio"',
+    'Build-GNSSAgent -Name "GNSSAgent-SmallRadio" -GOARCH "mipsle" -GOMIPS "hardfloat" -Target "small-radio"',
     'CGO_ENABLED',
     '-trimpath',
     '-s -w',

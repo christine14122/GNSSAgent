@@ -43,6 +43,7 @@ function Build-GNSSAgent {
         [Parameter(Mandatory = $true)][string]$GOARCH,
         [string]$GOARM = "",
         [string]$GOARM64 = "",
+        [string]$GOMIPS = "",
         [Parameter(Mandatory = $true)][string]$Target
     )
 
@@ -50,12 +51,14 @@ function Build-GNSSAgent {
     $previousGOARCH = $env:GOARCH
     $previousGOARM = $env:GOARM
     $previousGOARM64 = $env:GOARM64
+    $previousGOMIPS = $env:GOMIPS
     $previousCGO = $env:CGO_ENABLED
     try {
         $env:GOOS = $GOOS
         $env:GOARCH = $GOARCH
         $env:GOARM = $GOARM
         $env:GOARM64 = $GOARM64
+        $env:GOMIPS = $GOMIPS
         $env:CGO_ENABLED = "0"
         $destination = Join-Path $outputRoot $Name
         & $goExe build -trimpath -ldflags "-s -w -X gnssagent/internal/buildinfo.Target=$Target" `
@@ -69,6 +72,7 @@ function Build-GNSSAgent {
         Restore-ProcessEnvironment "GOARCH" $previousGOARCH
         Restore-ProcessEnvironment "GOARM" $previousGOARM
         Restore-ProcessEnvironment "GOARM64" $previousGOARM64
+        Restore-ProcessEnvironment "GOMIPS" $previousGOMIPS
         Restore-ProcessEnvironment "CGO_ENABLED" $previousCGO
     }
 }
@@ -77,6 +81,7 @@ $previousGOOS = $env:GOOS
 $previousGOARCH = $env:GOARCH
 $previousGOARM = $env:GOARM
 $previousGOARM64 = $env:GOARM64
+$previousGOMIPS = $env:GOMIPS
 $previousCGO = $env:CGO_ENABLED
 $previousGOTOOLCHAIN = $env:GOTOOLCHAIN
 Push-Location $projectRoot
@@ -121,6 +126,7 @@ try {
 	$env:GOARCH = "amd64"
 	Restore-ProcessEnvironment "GOARM" $null
 	Restore-ProcessEnvironment "GOARM64" $null
+	Restore-ProcessEnvironment "GOMIPS" $null
 	$env:CGO_ENABLED = "0"
     & $goExe test ./...
     if ($LASTEXITCODE -ne 0) {
@@ -130,12 +136,14 @@ try {
     Build-GNSSAgent -Name "GNSSAgent-CCU" -GOARCH "amd64" -Target "ccu"
     Build-GNSSAgent -Name "GNSSAgent-MultibandRadio" -GOARCH "arm64" -GOARM64 "v8.0" -Target "multiband-radio"
     Build-GNSSAgent -Name "GNSSAgent-MultibandHandheld" -GOARCH "arm" -GOARM "7" -Target "multiband-handheld"
+    Build-GNSSAgent -Name "GNSSAgent-SmallRadio" -GOARCH "mipsle" -GOMIPS "hardfloat" -Target "small-radio"
 } finally {
     Pop-Location
     Restore-ProcessEnvironment "GOOS" $previousGOOS
     Restore-ProcessEnvironment "GOARCH" $previousGOARCH
     Restore-ProcessEnvironment "GOARM" $previousGOARM
     Restore-ProcessEnvironment "GOARM64" $previousGOARM64
+    Restore-ProcessEnvironment "GOMIPS" $previousGOMIPS
     Restore-ProcessEnvironment "GOTOOLCHAIN" $previousGOTOOLCHAIN
     Restore-ProcessEnvironment "CGO_ENABLED" $previousCGO
 }
