@@ -16,7 +16,15 @@ if "%1"=="version" (
   echo go version %FAKE_GO_VERSION% windows/amd64
   exit /b 0
 )
-echo %1>>"%FAKE_GO_LOG%"
+if "%1"=="build" (
+  if "%GOARCH%"=="mipsle" (
+    echo smallradio:%GOMIPS%>>"%FAKE_GO_LOG%"
+  ) else (
+    echo build>>"%FAKE_GO_LOG%"
+  )
+) else (
+  echo %1>>"%FAKE_GO_LOG%"
+)
 if "%FAKE_GO_FAIL%"=="%1" exit /b 1
 exit /b 0
 '@ | Set-Content -LiteralPath (Join-Path $fakeBin "go.cmd") -Encoding ASCII
@@ -50,6 +58,7 @@ $previousPath = $env:PATH
 $previousLog = $env:FAKE_GO_LOG
 $previousVersion = $env:FAKE_GO_VERSION
 $previousFailure = $env:FAKE_GO_FAIL
+$previousGomips = $env:GOMIPS
 
 try {
     $env:PATH = "$fakeBin;$previousPath"
@@ -57,11 +66,14 @@ try {
 
     $env:FAKE_GO_VERSION = "go9.9.9"
     $env:FAKE_GO_FAIL = ""
+    $env:GOMIPS = "caller-sentinel"
     & (Join-Path $fixtureDirectory "build.ps1") -OutputDirectory (Join-Path $temporaryRoot "ordinary-success")
     $calls = @(Get-Content -LiteralPath $fakeLog)
-    Assert-Equal $calls.Count 4 "Ordinary system Go did not run test plus three builds exactly once"
+    Assert-Equal $calls.Count 5 "Ordinary system Go did not run test plus four builds exactly once"
     Assert-Equal (@($calls | Where-Object { $_ -eq "test" }).Count) 1 "Ordinary tests were not run once"
     Assert-Equal (@($calls | Where-Object { $_ -eq "build" }).Count) 3 "Ordinary builds were not run once each"
+    Assert-Equal (@($calls | Where-Object { $_ -eq "smallradio:hardfloat" }).Count) 1 "SmallRadio did not build once with hard-float MIPS"
+    Assert-Equal $env:GOMIPS "caller-sentinel" "Ordinary build did not restore the caller GOMIPS value"
 
     Clear-Content -LiteralPath $fakeLog
     $env:FAKE_GO_FAIL = "build"
@@ -106,6 +118,7 @@ try {
     Restore-ProcessEnvironment "FAKE_GO_LOG" $previousLog
     Restore-ProcessEnvironment "FAKE_GO_VERSION" $previousVersion
     Restore-ProcessEnvironment "FAKE_GO_FAIL" $previousFailure
+    Restore-ProcessEnvironment "GOMIPS" $previousGomips
 }
 
 Write-Host "GNSSAgent PowerShell build behavior passed."

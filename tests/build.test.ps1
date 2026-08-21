@@ -14,7 +14,8 @@ foreach ($path in @(
     (Join-Path $makeDirectory "makefile_CCU"),
     (Join-Path $makeDirectory "makefile_HF"),
     (Join-Path $makeDirectory "makefile_MultibandRadio"),
-    (Join-Path $makeDirectory "makefile_MultibandHandheld")
+    (Join-Path $makeDirectory "makefile_MultibandHandheld"),
+    (Join-Path $makeDirectory "makefile_SmallRadio")
 )) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
         throw "Required build script is missing: $path"
@@ -27,7 +28,8 @@ foreach ($expectedName in @(
     "makefile_CCU",
     "makefile_HF",
     "makefile_MultibandRadio",
-    "makefile_MultibandHandheld"
+    "makefile_MultibandHandheld",
+    "makefile_SmallRadio"
 )) {
     if (-not ($actualMakefileNames -ccontains $expectedName)) {
         throw "Required Makefile has incorrect filename casing: $expectedName"
@@ -46,8 +48,12 @@ $required = @(
     'GNSSAgent-CCU',
     'GNSSAgent-MultibandRadio',
     'GNSSAgent-MultibandHandheld',
+    'GNSSAgent-SmallRadio',
     '-GOARM64 "v8.0"',
     '-GOARM "7"',
+    '-GOARCH "mipsle"',
+    '-GOMIPS "hardfloat"',
+    '-Target "small-radio"',
     'CGO_ENABLED',
     '-trimpath',
     '-s -w',
@@ -84,13 +90,17 @@ foreach ($text in @(
     'GNSSAgent-CCU',
     'GNSSAgent-MultibandRadio',
     'GNSSAgent-MultibandHandheld',
+    'GNSSAgent-SmallRadio',
     'GNSSAgent-HF',
     'GOOS=linux',
     'GOARCH=amd64',
     'GOARCH=arm64',
     'GOARCH=arm',
+    'GOARCH=mipsle',
     'GOARM64=v8.0',
     'GOARM=7',
+    'GOMIPS=hardfloat',
+    'gnssagent/internal/buildinfo.Target=small-radio',
     'CGO_ENABLED=0',
     'GOTOOLCHAIN=local',
     '-trimpath',
@@ -106,7 +116,8 @@ foreach ($wrapper in @(
     @{ Path = "makefile_CCU"; Target = "ccu" },
     @{ Path = "makefile_HF"; Target = "hf" },
     @{ Path = "makefile_MultibandRadio"; Target = "multiband-radio" },
-    @{ Path = "makefile_MultibandHandheld"; Target = "multiband-handheld" }
+    @{ Path = "makefile_MultibandHandheld"; Target = "multiband-handheld" },
+    @{ Path = "makefile_SmallRadio"; Target = "small-radio" }
 )) {
     $content = Get-Content -LiteralPath (Join-Path $makeDirectory $wrapper.Path) -Raw
     if (-not $content.Contains('$(MAKE_DIR)/makefile') -or -not $content.Contains($wrapper.Target)) {

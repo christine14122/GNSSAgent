@@ -8,7 +8,7 @@ make_dir="$project_dir/build/scripts/make"
 outside_dir="$tmp_dir/outside"
 
 mkdir -p "$make_dir" "$outside_dir"
-for file in makefile makefile_CCU makefile_HF makefile_MultibandRadio makefile_MultibandHandheld; do
+for file in makefile makefile_CCU makefile_HF makefile_MultibandRadio makefile_MultibandHandheld makefile_SmallRadio; do
     cp "$repo_dir/build/scripts/make/$file" "$make_dir/$file"
 done
 
@@ -43,14 +43,16 @@ assert_target() {
 assert_target ccu '.go1.26.4-linux-amd64' 'GOOS=linux GOARCH=amd64' 'GNSSAgent-CCU' ccu
 assert_target multiband-radio '.go1.26.4-linux-amd64' 'GOOS=linux GOARCH=arm64 GOARM64=v8.0' 'GNSSAgent-MultibandRadio' multiband-radio
 assert_target multiband-handheld '.go1.26.4-linux-amd64' 'GOOS=linux GOARCH=arm GOARM=7' 'GNSSAgent-MultibandHandheld' multiband-handheld
+assert_target small-radio '.go1.26.4-linux-amd64' 'GOOS=linux GOARCH=mipsle GOMIPS=hardfloat' 'GNSSAgent-SmallRadio' small-radio
 assert_target hf '.go1.23.12-linux-amd64' 'GOOS=linux GOARCH=arm GOARM=7' 'GNSSAgent-HF' hf
 
-for wrapper_target in ccu hf multiband-radio multiband-handheld; do
+for wrapper_target in ccu hf multiband-radio multiband-handheld small-radio; do
     case "$wrapper_target" in
         ccu) wrapper=makefile_CCU ;;
         hf) wrapper=makefile_HF ;;
         multiband-radio) wrapper=makefile_MultibandRadio ;;
         multiband-handheld) wrapper=makefile_MultibandHandheld ;;
+        small-radio) wrapper=makefile_SmallRadio ;;
     esac
     output=$(cd "$outside_dir" && make -n -f "$make_dir/$wrapper" all)
     require_contains "$output" " $wrapper_target" "$wrapper wrapper"
@@ -59,12 +61,12 @@ for wrapper_target in ccu hf multiband-radio multiband-handheld; do
     require_contains "$output" " $wrapper_target" "$wrapper default goal"
 done
 
-for makefile in makefile makefile_CCU makefile_HF makefile_MultibandRadio makefile_MultibandHandheld; do
+for makefile in makefile makefile_CCU makefile_HF makefile_MultibandRadio makefile_MultibandHandheld makefile_SmallRadio; do
     make -f "$make_dir/$makefile" install >/dev/null
     [ ! -e "$project_dir/build/dist" ] || fail "$makefile install changed the output directory"
 done
 
-artifact_names='GNSSAgent-CCU GNSSAgent-MultibandRadio GNSSAgent-MultibandHandheld GNSSAgent-HF'
+artifact_names='GNSSAgent-CCU GNSSAgent-MultibandRadio GNSSAgent-MultibandHandheld GNSSAgent-SmallRadio GNSSAgent-HF'
 dist_dir="$project_dir/build/dist/bin"
 
 reset_artifacts() {
@@ -91,6 +93,7 @@ assert_wrapper_clean() {
 assert_wrapper_clean makefile_CCU GNSSAgent-CCU
 assert_wrapper_clean makefile_MultibandRadio GNSSAgent-MultibandRadio
 assert_wrapper_clean makefile_MultibandHandheld GNSSAgent-MultibandHandheld
+assert_wrapper_clean makefile_SmallRadio GNSSAgent-SmallRadio
 assert_wrapper_clean makefile_HF GNSSAgent-HF
 
 reset_artifacts
@@ -336,7 +339,7 @@ fi
 space_project="$tmp_dir/project with spaces"
 space_make_dir="$space_project/build/scripts/make"
 mkdir -p "$space_make_dir"
-for file in makefile makefile_CCU makefile_HF makefile_MultibandRadio makefile_MultibandHandheld; do
+for file in makefile makefile_CCU makefile_HF makefile_MultibandRadio makefile_MultibandHandheld makefile_SmallRadio; do
     cp "$make_dir/$file" "$space_make_dir/$file"
     if make -n -f "$space_make_dir/$file" >/dev/null 2>"$tmp_dir/space-error"; then
         fail "$file accepted a whitespace-containing path"
