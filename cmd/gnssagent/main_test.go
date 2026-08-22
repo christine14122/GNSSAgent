@@ -28,7 +28,7 @@ func TestParseLogLevel(t *testing.T) {
 }
 
 func TestRunRejectsInvalidConfigurationBeforeStarting(t *testing.T) {
-	if err := run([]string{"--udp-listen", "0.0.0.0:29501"}); err == nil {
+	if err := run([]string{"--udp-listen", "[::1]:29501"}); err == nil {
 		t.Fatal("invalid UDP listener accepted")
 	}
 	if err := run([]string{"--log-level", "verbose"}); err == nil {

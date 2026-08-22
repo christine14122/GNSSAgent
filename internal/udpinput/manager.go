@@ -139,7 +139,7 @@ func consumeSocket(socket packetSocket, sink Sink) error {
 			}
 		}
 
-		if !validLoopbackSource(result.Source) {
+		if !validIPv4Source(result.Source) {
 			sink.DatagramRejected(RejectSource)
 			continue
 		}
@@ -161,8 +161,8 @@ func consumeSocket(socket packetSocket, sink Sink) error {
 	}
 }
 
-func validLoopbackSource(source netip.AddrPort) bool {
-	return source.IsValid() && source.Addr().Is4() && source.Addr().IsLoopback()
+func validIPv4Source(source netip.AddrPort) bool {
+	return source.IsValid() && source.Addr().Is4()
 }
 
 func waitForContext(ctx context.Context, duration time.Duration) bool {

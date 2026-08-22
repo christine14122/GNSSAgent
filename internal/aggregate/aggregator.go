@@ -129,6 +129,16 @@ func sentenceSecond(sentence nmea.Sentence) (int64, bool) {
 			return 0, false
 		}
 		millis = sentence.GST.MillisOfDay
+	case nmea.KindZDA:
+		if sentence.ZDA == nil || !sentence.ZDA.TimeValid {
+			return 0, false
+		}
+		millis = sentence.ZDA.MillisOfDay
+	case nmea.KindGLL:
+		if sentence.GLL == nil || !sentence.GLL.TimeValid {
+			return 0, false
+		}
+		millis = sentence.GLL.MillisOfDay
 	default:
 		return 0, false
 	}

@@ -193,8 +193,8 @@ valid == 1
 | 0 | 8 | uint64 | — | `field_validity_mask` | 位 0–8 见本表，位 9–63 为 0 |
 | 8 | 8 | uint64 | 0 | `utc_time` | GNSS UTC，Unix epoch 毫秒 |
 | 16 | 8 | uint64 | 1 | `recv_time` | 服务端接收本周期首条有效输入的本机 Unix 毫秒时间 |
-| 24 | 8 | float64 | 2 | `latitude` | 纬度，度，范围 -90～90；北为正 |
-| 32 | 8 | float64 | 3 | `longitude` | 经度，度，范围 -180～180；东为正 |
+| 24 | 8 | float64 | 2 | `latitude` | 纬度，度，范围 -90～90；北为正；GGA 优先、RMC 次之、GLL 备用 |
+| 32 | 8 | float64 | 3 | `longitude` | 经度，度，范围 -180～180；东为正；GGA 优先、RMC 次之、GLL 备用 |
 | 40 | 8 | float64 | 4 | `altitude_msl` | 相对平均海平面的海拔，米，可为负 |
 | 48 | 4 | float32 | 5 | `ground_speed_mps` | 地速，米/秒，非负 |
 | 52 | 4 | float32 | 6 | `course_over_ground_deg` | 地面航向，真北为 0°、顺时针，范围 [0,360) |
@@ -218,8 +218,8 @@ SIMPLE 帧头固定为：
 | 0 | 8 | uint64 | — | `field_validity_mask` | 位 0–28 见本表，位 29–63 为 0 |
 | 8 | 8 | uint64 | 0 | `utc_time` | GNSS UTC，Unix epoch 毫秒 |
 | 16 | 8 | uint64 | 1 | `recv_time` | 服务端接收本周期首条有效输入的本机 Unix 毫秒时间 |
-| 24 | 8 | float64 | 2 | `latitude` | 纬度，度，范围 -90～90；北为正 |
-| 32 | 8 | float64 | 3 | `longitude` | 经度，度，范围 -180～180；东为正 |
+| 24 | 8 | float64 | 2 | `latitude` | 纬度，度，范围 -90～90；北为正；GGA 优先、RMC 次之、GLL 备用 |
+| 32 | 8 | float64 | 3 | `longitude` | 经度，度，范围 -180～180；东为正；GGA 优先、RMC 次之、GLL 备用 |
 | 40 | 8 | float64 | 4 | `altitude_msl` | 相对平均海平面的海拔，米，可为负 |
 | 48 | 8 | float64 | 5 | `altitude_ellipsoid` | 椭球高，米，可为负 |
 | 56 | 1 | uint8 | 6 | `valid` | 0=导航解无效，1=导航解有效 |

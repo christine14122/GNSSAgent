@@ -1,0 +1,72 @@
+{
+  "pcap_parse_errors": [],
+  "datagrams": 7799,
+  "bytes": 493549,
+  "duration_seconds": 599.9269099235535,
+  "datagrams_per_minute": 779.9950164923056,
+  "length_min": 27,
+  "length_max": 79,
+  "length_distribution": {
+    "27": 144,
+    "28": 30,
+    "31": 500,
+    "39": 600,
+    "40": 388,
+    "42": 52,
+    "44": 45,
+    "55": 41,
+    "59": 41,
+    "60": 1,
+    "61": 49,
+    "63": 9,
+    "64": 561,
+    "65": 3,
+    "66": 600,
+    "67": 536,
+    "68": 454,
+    "69": 289,
+    "70": 38,
+    "72": 826,
+    "73": 343,
+    "74": 592,
+    "75": 234,
+    "77": 600,
+    "78": 223,
+    "79": 600
+  },
+  "terminators": {
+    "CRLF": 7799
+  },
+  "talkers": {
+    "BD": 2399,
+    "GN": 3000,
+    "GP": 2400
+  },
+  "sentence_types": {
+    "GSV": 4799,
+    "ZDA": 600,
+    "RMC": 600,
+    "GGA": 600,
+    "GSA": 1200
+  },
+  "sentence_types_per_minute": {
+    "GSV": 479.95846700174053,
+    "ZDA": 60.00730989811301,
+    "RMC": 60.00730989811301,
+    "GGA": 60.00730989811301,
+    "GSA": 120.01461979622601
+  },
+  "contract_errors": {},
+  "bad_examples": [],
+  "gsv_complete_groups": {
+    "GP": 600,
+    "BD": 599
+  },
+  "gsv_incomplete_groups": 1,
+  "gsv_duplicate_numbers": 0,
+  "gsv_out_of_order": 1,
+  "gnssagent_warning_lines": {
+    "UDP receive buffer below requested size": 1,
+    "NMEA sentence unsupported or invalid": 11
+  }
+}

@@ -1,0 +1,3 @@
+host=192.168.5.1
+start_local=2026-08-21T17:30:01.3259120+08:00
+duration_target_seconds=60

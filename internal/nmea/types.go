@@ -22,6 +22,8 @@ const (
 	KindGSA
 	KindGSV
 	KindGST
+	KindZDA
+	KindGLL
 )
 
 type Sentence struct {
@@ -33,6 +35,8 @@ type Sentence struct {
 	GSA        *GSA
 	GSV        *GSV
 	GST        *GST
+	ZDA        *ZDA
+	GLL        *GLL
 }
 
 type RMC struct {
@@ -86,4 +90,23 @@ type GST struct {
 	LatitudeError  Field[float64]
 	LongitudeError Field[float64]
 	AltitudeError  Field[float64]
+}
+
+// ZDA supplies UTC time and calendar date. Its local-zone fields are not used
+// because the sentence time is already UTC.
+type ZDA struct {
+	MillisOfDay int64
+	TimeValid   bool
+	Date        Field[time.Time]
+}
+
+// GLL supplies position, UTC time-of-day, navigation status, and mode. It
+// carries no calendar date, so it cannot independently produce an epoch UTC.
+type GLL struct {
+	MillisOfDay int64
+	TimeValid   bool
+	Latitude    Field[float64]
+	Longitude   Field[float64]
+	Status      Field[byte]
+	Mode        Field[byte]
 }

@@ -23,7 +23,7 @@ func Parse(args []string, target string) (Config, error) {
 	_ = target
 
 	cfg := Config{
-		UDPListenAddress:     "127.0.0.1:29501",
+		UDPListenAddress:     "0.0.0.0:29501",
 		TCPListenAddress:     "0.0.0.0:29501",
 		MaxConnections:       5,
 		MaxRemoteConnections: 4,
@@ -33,7 +33,7 @@ func Parse(args []string, target string) (Config, error) {
 
 	fs := flag.NewFlagSet("gnssagent", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	fs.StringVar(&cfg.UDPListenAddress, "udp-listen", cfg.UDPListenAddress, "IPv4 loopback UDP address for raw NMEA input")
+	fs.StringVar(&cfg.UDPListenAddress, "udp-listen", cfg.UDPListenAddress, "IPv4 UDP address for raw NMEA input")
 	fs.StringVar(&cfg.TCPListenAddress, "tcp-listen", cfg.TCPListenAddress, "TCP address for GNSS status subscribers")
 	fs.IntVar(&cfg.MaxConnections, "max-connections", cfg.MaxConnections, "maximum total TCP connections")
 	fs.IntVar(&cfg.MaxRemoteConnections, "max-remote-connections", cfg.MaxRemoteConnections, "maximum non-loopback TCP connections")
@@ -48,8 +48,8 @@ func Parse(args []string, target string) (Config, error) {
 	}
 
 	udpAddress, err := netip.ParseAddrPort(cfg.UDPListenAddress)
-	if err != nil || !udpAddress.Addr().Is4() || !udpAddress.Addr().IsLoopback() || udpAddress.Port() == 0 {
-		return Config{}, fmt.Errorf("udp-listen must be a non-zero IPv4 loopback address: %q", cfg.UDPListenAddress)
+	if err != nil || !udpAddress.Addr().Is4() || udpAddress.Port() == 0 {
+		return Config{}, fmt.Errorf("udp-listen must be a non-zero IPv4 address: %q", cfg.UDPListenAddress)
 	}
 	if cfg.MaxConnections <= 0 {
 		return Config{}, fmt.Errorf("max-connections must be greater than zero")

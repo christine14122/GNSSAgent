@@ -331,11 +331,11 @@ func TestManagerValidatesAndDeliversIndependentDatagrams(t *testing.T) {
 	socket := newFakeSocket(reads...)
 	sink := runOneSocket(t, socket)
 
-	if len(sink.sentences) != 3 {
-		t.Fatalf("delivered sentences = %d, want 3", len(sink.sentences))
+	if len(sink.sentences) != 4 {
+		t.Fatalf("delivered sentences = %d, want 4", len(sink.sentences))
 	}
 	for i, sentence := range sink.sentences {
-		wantTime := baseTime.Add(time.Duration(8+i) * time.Second)
+		wantTime := baseTime.Add(time.Duration(7+i) * time.Second)
 		if sentence.Kind != nmea.KindGSV || !sentence.ReceivedAt.Equal(wantTime) {
 			t.Fatalf("sentence %d = kind %v time %v, want GSV at %v", i, sentence.Kind, sentence.ReceivedAt, wantTime)
 		}
@@ -346,7 +346,6 @@ func TestManagerValidatesAndDeliversIndependentDatagrams(t *testing.T) {
 		RejectTruncated: 1,
 		RejectMultiple:  1,
 		RejectNUL:       1,
-		RejectSource:    1,
 		RejectStart:     1,
 	}
 	if !reflect.DeepEqual(sink.datagramRejects, wantDatagramRejects) {

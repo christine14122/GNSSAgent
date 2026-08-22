@@ -31,7 +31,7 @@
 - 本机 UDP NMEA 接收。
 - UDP 数据报格式、长度和来源校验。
 - NMEA 校验和校验及字段解析。
-- RMC、GGA、GSA、GSV、GST 数据聚合。
+- RMC、GGA、GLL、GSA、GSV、GST、ZDA 数据聚合。
 - GPS、北斗、GLONASS、Galileo 可见卫星数量统计。
 - 使用中卫星平均 C/N0 计算。
 - TCP SIMPLE/FULL 订阅和状态发布。
@@ -188,15 +188,17 @@ forward_delay = GNSSAgent 的 recvfrom/recvmsg 返回时间 - UART 进程形成�
 |---|---|
 | RMC | UTC 日期与时间、定位有效性、位置、地速、地面航向 |
 | GGA | 定位质量、位置、海拔、椭球高、使用卫星数、GGA HDOP、差分龄期 |
+| GLL | UTC 时分秒、定位有效性、位置、模式 |
 | GSA | 2D/3D 状态、使用卫星编号、PDOP/HDOP/VDOP |
 | GSV | 各星座可见卫星数及卫星 C/N0 |
 | GST | 伪距 RMS 与位置误差椭圆七个原始统计字段 |
+| ZDA | UTC 日期与时间 |
 
 GST 字段作为跨设备协议能力保留。当前 MultibandRadio 不输出 GST，因此 FULL 有效位 22–28 预期为 0；GST 使用构造输入完成单元测试。当前目标不输出 GL/GA 时，GLONASS/Galileo 计数位 12、13 同样保持为 0。
 
 ## 8. 每秒聚合
 
-1. RMC、GGA、GST 自带 UTC 时分秒，使用 UTC 整秒作为周期键。
+1. RMC、GGA、GLL、GST、ZDA 自带 UTC 时分秒，使用 UTC 整秒作为周期键。
 2. GSA、GSV 没有完整 UTC 时间，按到达顺序附着到当前周期。
 3. 新 UTC 秒到达时完成并发布前一周期。
 4. 下一秒语句未到时，当前周期在首句到达 1.5 秒后完成。
@@ -229,11 +231,11 @@ FULL 载荷固定为 124 字节：
 |---:|---|---|---|---|
 | 0 | `utc_time` | uint64 | RMC | GNSS UTC Unix 毫秒 |
 | 1 | `recv_time` | uint64 | UDP 接收 | 周期首条正确 NMEA 的 UDP 接收时间 |
-| 2 | `latitude` | float64 | GGA 优先、RMC 备用 | 纬度，度 |
-| 3 | `longitude` | float64 | GGA 优先、RMC 备用 | 经度，度 |
+| 2 | `latitude` | float64 | GGA 优先、RMC 次之、GLL 备用 | 纬度，度 |
+| 3 | `longitude` | float64 | GGA 优先、RMC 次之、GLL 备用 | 经度，度 |
 | 4 | `altitude_msl` | float64 | GGA | 平均海平面海拔，米 |
 | 5 | `altitude_ellipsoid` | float64 | GGA | 椭球高，米 |
-| 6 | `valid` | uint8 | RMC、GGA | 导航解是否有效，0/1 |
+| 6 | `valid` | uint8 | RMC、GGA、GLL | 导航解是否有效，0/1 |
 | 7 | `fix_dimension` | uint8 | GSA | 1=无定位，2=2D，3=3D |
 | 8 | `solution_type` | uint8 | GGA | GGA quality 原值 |
 | 9 | `used_satellites` | uint8 | GGA 优先、GSA 备用 | 参与定位卫星总数 |
@@ -261,10 +263,10 @@ FULL 载荷固定为 124 字节：
 
 ### 9.3 `valid` 计算
 
-- RMC 通过状态字段报告有效或无效，GGA 通过 quality 是否为 0 报告有效或无效。
-- RMC 与 GGA 同时存在时，任意一个明确无效，则 `valid=0`。
-- 只存在其中一个时采用该语句结论。
-- 两者都不存在时，`valid` 有效位清 0，值编码为 0。
+- RMC 和 GLL 通过状态字段报告有效或无效，GGA 通过 quality 是否为 0 报告有效或无效。
+- RMC、GGA、GLL 同时存在时，任意一个明确无效，则 `valid=0`。
+- 只存在其中一种时采用该语句结论；存在多种且均明确有效时 `valid=1`。
+- 三者都没有明确结论时，`valid` 有效位清 0，值编码为 0。
 - 消费者使用位置时必须同时检查经纬度有效位、`valid` 有效位和 `valid==1`。
 
 ### 9.4 卫星统计
@@ -429,9 +431,9 @@ SIMPLE 载荷固定为 58 字节，拥有独立的 0–8 位有效掩码：
 
 ### 15.2 NMEA 与聚合单元测试
 
-- GP、BD/GB、GN、GL、GA talker 的 RMC/GGA/GSA/GSV/GST 解析。
+- GP、BD/GB、GN、GL、GA talker 的 RMC/GGA/GLL/GSA/GSV/GST/ZDA 解析。
 - 空字段、非法数值、NaN/Inf、错误校验和和超长语句。
-- RMC/GGA 有效性组合真值表。
+- RMC/GGA/GLL 有效性组合真值表。
 - GGA HDOP 与 GSA 三项 DOP 独立。
 - `127.000` DOP 哨兵清除对应有效位。
 - GGA/GSA used satellites 优先和歧义回退规则。

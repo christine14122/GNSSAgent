@@ -52,6 +52,14 @@ func cloneSentence(sentence nmea.Sentence) nmea.Sentence {
 		payload := *sentence.GST
 		clone.GST = &payload
 	}
+	if sentence.ZDA != nil {
+		payload := *sentence.ZDA
+		clone.ZDA = &payload
+	}
+	if sentence.GLL != nil {
+		payload := *sentence.GLL
+		clone.GLL = &payload
+	}
 	return clone
 }
 
@@ -59,7 +67,7 @@ func (c *cycle) status() model.FullStatus {
 	var status model.FullStatus
 	setReceiveTime(&status, c.firstReceivedAt)
 
-	var ggaLatitude, ggaLongitude, rmcLatitude, rmcLongitude nmea.Field[float64]
+	var ggaLatitude, ggaLongitude, rmcLatitude, rmcLongitude, gllLatitude, gllLongitude nmea.Field[float64]
 	var ggaUsed nmea.Field[uint8]
 	var explicitTrue, explicitFalse bool
 	var dopGroups []dopGroup
@@ -119,10 +127,29 @@ func (c *cycle) status() model.FullStatus {
 			if sentence.GST != nil {
 				setGSTFields(&status, sentence.GST)
 			}
+		case nmea.KindZDA:
+			if sentence.ZDA != nil {
+				setUTCFromDateAndTime(&status, sentence.ZDA.Date, sentence.ZDA.MillisOfDay, sentence.ZDA.TimeValid)
+			}
+		case nmea.KindGLL:
+			gll := sentence.GLL
+			if gll == nil {
+				continue
+			}
+			rememberFinite64(&gllLatitude, gll.Latitude)
+			rememberFinite64(&gllLongitude, gll.Longitude)
+			if gll.Status.Valid {
+				switch gll.Status.Value {
+				case 'A':
+					explicitTrue = true
+				case 'V':
+					explicitFalse = true
+				}
+			}
 		}
 	}
 
-	setPreferredPosition(&status, ggaLatitude, ggaLongitude, rmcLatitude, rmcLongitude)
+	setPreferredPosition(&status, ggaLatitude, ggaLongitude, rmcLatitude, rmcLongitude, gllLatitude, gllLongitude)
 	if explicitTrue || explicitFalse {
 		status.FieldValidityMask |= model.FullValidValid
 		if explicitTrue && !explicitFalse {
@@ -167,10 +194,14 @@ func setReceiveTime(status *model.FullStatus, receivedAt time.Time) {
 }
 
 func setUTC(status *model.FullStatus, rmc *nmea.RMC) {
-	if status.FieldValidityMask&model.FullUTCValid != 0 || !rmc.TimeValid || !rmc.Date.Valid || rmc.MillisOfDay < 0 || rmc.MillisOfDay >= int64(24*time.Hour/time.Millisecond) {
+	setUTCFromDateAndTime(status, rmc.Date, rmc.MillisOfDay, rmc.TimeValid)
+}
+
+func setUTCFromDateAndTime(status *model.FullStatus, date nmea.Field[time.Time], millisOfDay int64, timeValid bool) {
+	if status.FieldValidityMask&model.FullUTCValid != 0 || !timeValid || !date.Valid || millisOfDay < 0 || millisOfDay >= int64(24*time.Hour/time.Millisecond) {
 		return
 	}
-	millis := rmc.Date.Value.UTC().Add(time.Duration(rmc.MillisOfDay) * time.Millisecond).UnixMilli()
+	millis := date.Value.UTC().Add(time.Duration(millisOfDay) * time.Millisecond).UnixMilli()
 	if millis < 0 {
 		return
 	}
@@ -251,14 +282,20 @@ func finite64(field nmea.Field[float64]) bool {
 	return field.Valid && !math.IsNaN(field.Value) && !math.IsInf(field.Value, 0)
 }
 
-func setPreferredPosition(status *model.FullStatus, ggaLatitude, ggaLongitude, rmcLatitude, rmcLongitude nmea.Field[float64]) {
+func setPreferredPosition(status *model.FullStatus, ggaLatitude, ggaLongitude, rmcLatitude, rmcLongitude, gllLatitude, gllLongitude nmea.Field[float64]) {
 	latitude := ggaLatitude
 	if !latitude.Valid {
 		latitude = rmcLatitude
 	}
+	if !latitude.Valid {
+		latitude = gllLatitude
+	}
 	longitude := ggaLongitude
 	if !longitude.Valid {
 		longitude = rmcLongitude
+	}
+	if !longitude.Valid {
+		longitude = gllLongitude
 	}
 	if latitude.Valid {
 		status.Latitude = latitude.Value

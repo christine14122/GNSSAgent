@@ -40,6 +40,12 @@ func Parse(line []byte, receivedAt time.Time) (Sentence, error) {
 	case "GST":
 		sentence.Kind = KindGST
 		sentence.GST = parseGST(fields)
+	case "ZDA":
+		sentence.Kind = KindZDA
+		sentence.ZDA = parseZDA(fields)
+	case "GLL":
+		sentence.Kind = KindGLL
+		sentence.GLL = parseGLL(fields)
 	default:
 		return Sentence{}, fmt.Errorf("unsupported NMEA sentence type %q", identifier[2:])
 	}

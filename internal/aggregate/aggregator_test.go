@@ -81,6 +81,58 @@ func TestAggregatorCycleLifecycle(t *testing.T) {
 	})
 }
 
+func TestZDAProvidesUTCAndDrivesCycleTransitions(t *testing.T) {
+	base := time.Date(2026, 8, 18, 9, 23, 29, 0, time.UTC)
+	date := time.Date(2026, 8, 18, 0, 0, 0, 0, time.UTC)
+	a := New()
+	first := nmea.Sentence{Kind: nmea.KindZDA, Talker: "GN", ReceivedAt: base, ZDA: &nmea.ZDA{MillisOfDay: 33_809_000, TimeValid: true, Date: field(date)}}
+	if _, ok := a.Add(first); ok {
+		t.Fatal("first ZDA sentence published")
+	}
+	second := nmea.Sentence{Kind: nmea.KindZDA, Talker: "GN", ReceivedAt: base.Add(time.Second), ZDA: &nmea.ZDA{MillisOfDay: 33_810_000, TimeValid: true, Date: field(date)}}
+	got, ok := a.Add(second)
+	if !ok {
+		t.Fatal("second ZDA sentence did not publish prior cycle")
+	}
+	wantUTC := uint64(base.UnixMilli())
+	if got.FieldValidityMask&model.FullUTCValid == 0 || got.UTCTime != wantUTC {
+		t.Fatalf("ZDA UTC=%d mask=%#x, want %d", got.UTCTime, got.FieldValidityMask, wantUTC)
+	}
+}
+
+func TestGLLDrivesCyclesAndProvidesLowestPriorityPositionAndValidity(t *testing.T) {
+	base := time.Date(2026, 8, 22, 9, 0, 0, 0, time.UTC)
+	a := New()
+	first := nmea.Sentence{Kind: nmea.KindGLL, Talker: "GN", ReceivedAt: base, GLL: &nmea.GLL{
+		MillisOfDay: 32_400_000, TimeValid: true, Latitude: field(31.5), Longitude: field(118.5), Status: field(byte('A')),
+	}}
+	if _, ok := a.Add(first); ok {
+		t.Fatal("first GLL sentence published")
+	}
+	second := nmea.Sentence{Kind: nmea.KindGLL, Talker: "GN", ReceivedAt: base.Add(time.Second), GLL: &nmea.GLL{
+		MillisOfDay: 32_401_000, TimeValid: true, Status: field(byte('A')),
+	}}
+	got, ok := a.Add(second)
+	if !ok || got.Latitude != 31.5 || got.Longitude != 118.5 || got.Valid != 1 {
+		t.Fatalf("GLL status=(%+v, %t)", got, ok)
+	}
+	if got.FieldValidityMask&(model.FullLatitudeValid|model.FullLongitudeValid|model.FullValidValid) != model.FullLatitudeValid|model.FullLongitudeValid|model.FullValidValid {
+		t.Fatalf("GLL mask=%#x", got.FieldValidityMask)
+	}
+	if got.FieldValidityMask&model.FullUTCValid != 0 {
+		t.Fatalf("GLL synthesized epoch UTC: %+v", got)
+	}
+
+	got = aggregateSentences(t, []nmea.Sentence{
+		{Kind: nmea.KindGLL, ReceivedAt: base, GLL: &nmea.GLL{Latitude: field(30.0), Longitude: field(110.0), Status: field(byte('V'))}},
+		{Kind: nmea.KindRMC, ReceivedAt: base, RMC: &nmea.RMC{Latitude: field(31.0), Longitude: field(111.0), Status: field(byte('A'))}},
+		{Kind: nmea.KindGGA, ReceivedAt: base, GGA: &nmea.GGA{Latitude: field(32.0), Longitude: field(112.0), Quality: field(uint8(1))}},
+	})
+	if got.Latitude != 32 || got.Longitude != 112 || got.Valid != 0 || got.FieldValidityMask&model.FullValidValid == 0 {
+		t.Fatalf("GLL priority/truth table: %+v", got)
+	}
+}
+
 func TestFullStatusMapsEveryFieldAndValidZeros(t *testing.T) {
 	base := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
 	date := time.Date(2026, 8, 3, 0, 0, 0, 0, time.UTC)

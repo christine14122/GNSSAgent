@@ -130,6 +130,45 @@ func TestParseGSTAllErrorFields(t *testing.T) {
 	}
 }
 
+func TestParseZDAUTCDateAndTime(t *testing.T) {
+	got, err := Parse(sentence("GNZDA,092329.000,18,08,2026,00,00"), time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Kind != KindZDA || got.ZDA == nil || !got.ZDA.TimeValid || got.ZDA.MillisOfDay != 33_809_000 {
+		t.Fatalf("ZDA=%+v", got.ZDA)
+	}
+	wantDate := time.Date(2026, 8, 18, 0, 0, 0, 0, time.UTC)
+	if !got.ZDA.Date.Valid || !got.ZDA.Date.Value.Equal(wantDate) {
+		t.Fatalf("ZDA date=%+v, want %v", got.ZDA.Date, wantDate)
+	}
+}
+
+func TestParseZDARejectsInvalidCalendarDate(t *testing.T) {
+	got, err := Parse(sentence("GNZDA,092329.000,31,02,2026,00,00"), time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ZDA == nil || got.ZDA.Date.Valid {
+		t.Fatalf("ZDA=%+v", got.ZDA)
+	}
+}
+
+func TestParseGLLNavigationFields(t *testing.T) {
+	got, err := Parse(sentence("GNGLL,3156.18510,N,11838.90233,E,092942.25,A,A"), time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Kind != KindGLL || got.GLL == nil || got.GLL.MillisOfDay != 34_182_250 || !got.GLL.TimeValid {
+		t.Fatalf("GLL=%+v", got.GLL)
+	}
+	assertFloatField(t, "latitude", got.GLL.Latitude, 31.936418333333334)
+	assertFloatField(t, "longitude", got.GLL.Longitude, 118.64837216666667)
+	if got.GLL.Status != (Field[byte]{Value: 'A', Valid: true}) || got.GLL.Mode != (Field[byte]{Value: 'A', Valid: true}) {
+		t.Fatalf("status=%+v mode=%+v", got.GLL.Status, got.GLL.Mode)
+	}
+}
+
 func TestParseRMCNavigationFields(t *testing.T) {
 	receivedAt := time.Date(2026, 8, 3, 10, 11, 12, 13, time.FixedZone("CST", 8*60*60))
 	got, err := Parse(sentence("GPRMC,123519.25,A,4807.038,N,01131.000,E,22.4,84.4,230394,,,A"), receivedAt)
@@ -165,6 +204,8 @@ func TestParseDispatchesSupportedTalkersAndKinds(t *testing.T) {
 		{body: "GBGSA", talker: "GB", kind: KindGSA},
 		{body: "GNGSV", talker: "GN", kind: KindGSV},
 		{body: "GLGST", talker: "GL", kind: KindGST},
+		{body: "GNZDA", talker: "GN", kind: KindZDA},
+		{body: "GNGLL", talker: "GN", kind: KindGLL},
 		{body: "GAGGA", talker: "GA", kind: KindGGA},
 	}
 	for _, test := range tests {
@@ -177,7 +218,7 @@ func TestParseDispatchesSupportedTalkersAndKinds(t *testing.T) {
 				t.Fatalf("sentence=%+v", got)
 			}
 			payloads := 0
-			for _, present := range []bool{got.RMC != nil, got.GGA != nil, got.GSA != nil, got.GSV != nil, got.GST != nil} {
+			for _, present := range []bool{got.RMC != nil, got.GGA != nil, got.GSA != nil, got.GSV != nil, got.GST != nil, got.ZDA != nil, got.GLL != nil} {
 				if present {
 					payloads++
 				}
@@ -213,7 +254,7 @@ func TestParseReturnsZeroSentenceForFramingAndIdentifierErrors(t *testing.T) {
 }
 
 func TestParseShortRecognizedSentencesDoesNotPanic(t *testing.T) {
-	for _, body := range []string{"GPRMC", "GNGGA,", "GBGSA,A", "GLGSV,1", "GAGST,bad"} {
+	for _, body := range []string{"GPRMC", "GNGGA,", "GBGSA,A", "GLGSV,1", "GAGST,bad", "GNZDA", "GNGLL"} {
 		t.Run(body, func(t *testing.T) {
 			got, err := Parse(sentence(body), time.Time{})
 			if err != nil {

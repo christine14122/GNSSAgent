@@ -18,7 +18,7 @@ func requireError(t *testing.T, err error, want string) {
 
 func TestParseDefaultsAreTargetIndependent(t *testing.T) {
 	want := Config{
-		UDPListenAddress:     "127.0.0.1:29501",
+		UDPListenAddress:     "0.0.0.0:29501",
 		TCPListenAddress:     "0.0.0.0:29501",
 		MaxConnections:       5,
 		MaxRemoteConnections: 4,
@@ -45,10 +45,8 @@ func TestParseDefaultsAreTargetIndependent(t *testing.T) {
 	}
 }
 
-func TestParseUDPListenRequiresNonZeroIPv4Loopback(t *testing.T) {
+func TestParseUDPListenRequiresNonZeroIPv4Address(t *testing.T) {
 	for _, address := range []string{
-		"0.0.0.0:29501",
-		"192.168.7.2:29501",
 		"[::1]:29501",
 		"localhost:29501",
 		"127.0.0.1:0",
@@ -56,20 +54,20 @@ func TestParseUDPListenRequiresNonZeroIPv4Loopback(t *testing.T) {
 	} {
 		t.Run(address, func(t *testing.T) {
 			_, err := Parse([]string{"--udp-listen", address}, "multiband-radio")
-			requireError(t, err, fmt.Sprintf("udp-listen must be a non-zero IPv4 loopback address: %q", address))
+			requireError(t, err, fmt.Sprintf("udp-listen must be a non-zero IPv4 address: %q", address))
 		})
 	}
 }
 
-func TestParseAcceptsIPv4LoopbackRange(t *testing.T) {
+func TestParseAcceptsIPv4UDPAddresses(t *testing.T) {
 	got, err := Parse([]string{
-		"--udp-listen", "127.10.20.30:40000",
+		"--udp-listen", "192.168.7.2:40000",
 		"--tcp-listen", "192.168.7.2:30000",
 	}, "ccu")
 	if err != nil {
 		t.Fatalf("Parse() error = %v", err)
 	}
-	if got.UDPListenAddress != "127.10.20.30:40000" {
+	if got.UDPListenAddress != "192.168.7.2:40000" {
 		t.Fatalf("UDPListenAddress = %q", got.UDPListenAddress)
 	}
 	if got.TCPListenAddress != "192.168.7.2:30000" {
@@ -90,7 +88,7 @@ func TestSerialFlagsNoLongerExist(t *testing.T) {
 
 func TestParseFlagOverrides(t *testing.T) {
 	got, err := Parse([]string{
-		"--udp-listen", "127.0.0.2:31001",
+		"--udp-listen", "0.0.0.0:31001",
 		"--tcp-listen", "127.0.0.1:31002",
 		"--max-connections", "7",
 		"--max-remote-connections", "3",
@@ -103,7 +101,7 @@ func TestParseFlagOverrides(t *testing.T) {
 	}
 
 	want := Config{
-		UDPListenAddress:     "127.0.0.2:31001",
+		UDPListenAddress:     "0.0.0.0:31001",
 		TCPListenAddress:     "127.0.0.1:31002",
 		MaxConnections:       7,
 		MaxRemoteConnections: 3,
