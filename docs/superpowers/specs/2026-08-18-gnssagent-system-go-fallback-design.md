@@ -1,5 +1,7 @@
 # GNSSAgent 系统 Go 选择与回退设计
 
+> **状态：历史设计。** 已生效的工具链选择要求已合入 [`GNSSAgent-Requirements.md`](./GNSSAgent-Requirements.md) 第 4 节；本文仅用于追溯。
+
 ## 目标
 
 调整 Linux Make 构建的工具链选择：普通目标优先使用系统 Go，失败后使用仓库内置 Go 1.26.4 重试一次；HF 始终使用精确的 Go 1.23.12，并且构建失败后不重试。

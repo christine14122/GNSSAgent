@@ -1,5 +1,7 @@
 # GNSSAgent SmallRadio Build Target Design
 
+> **状态：历史设计。** 已生效的 SmallRadio 构建要求已合入 [`GNSSAgent-Requirements.md`](./GNSSAgent-Requirements.md) 第 4 节；本文仅用于追溯。
+
 ## Goal
 
 Add SmallRadio as a maintained GNSSAgent build target in the Linux Make and Windows PowerShell build paths, producing `build/dist/bin/GNSSAgent-SmallRadio` for the connected device.

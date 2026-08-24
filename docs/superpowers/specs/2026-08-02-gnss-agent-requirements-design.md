@@ -1,5 +1,7 @@
 # GNSSAgent 需求说明与系统设计
 
+> **状态：已作废。** 本文的串口直连与控制架构不再适用。自 2026-08-24 起，现行需求以 [`GNSSAgent-Requirements.md`](./GNSSAgent-Requirements.md) 为唯一基线。
+
 - 文档版本：1.2
 - 协议版本：1
 - 日期：2026-08-02

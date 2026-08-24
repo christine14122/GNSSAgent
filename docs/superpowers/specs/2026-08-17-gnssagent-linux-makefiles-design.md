@@ -1,5 +1,7 @@
 # GNSSAgent Linux Makefile 设计
 
+> **状态：历史设计。** 已生效的构建要求已合入 [`GNSSAgent-Requirements.md`](./GNSSAgent-Requirements.md) 第 4 节；本文仅用于追溯。
+
 ## 目标
 
 为 GNSSAgent 增加一套 Linux 主机上的可复现交叉编译入口，同时保留现有 Windows PowerShell 构建。一个主 Makefile 编译全部目标，四个薄封装 Makefile 分别只编译 CCU、MultibandRadio、MultibandHandheld 和 HF。

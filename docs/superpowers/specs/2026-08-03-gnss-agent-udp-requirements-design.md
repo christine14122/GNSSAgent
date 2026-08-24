@@ -1,5 +1,7 @@
 # GNSSAgent UDP 架构需求说明与系统设计
 
+> **状态：已被取代。** 本文内容已重组并合入 [`GNSSAgent-Requirements.md`](./GNSSAgent-Requirements.md)；自 2026-08-24 起不再作为独立需求基线。
+
 - 文档版本：1.0
 - 对外状态协议版本：1
 - UDP 输入协议版本：1

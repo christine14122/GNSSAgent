@@ -1,5 +1,7 @@
 # GNSSAgent PowerShell Go Selection Design
 
+> **状态：历史设计。** 已生效的 PowerShell 构建要求已合入 [`GNSSAgent-Requirements.md`](./GNSSAgent-Requirements.md) 第 4 节；本文仅用于追溯。
+
 ## Goal
 
 Align the Windows PowerShell build scripts with the Makefile toolchain-selection policy while keeping PowerShell builds single-attempt:
