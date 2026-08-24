@@ -1,7 +1,7 @@
 # GNSSAgent 需求规格
 
 - 文档标识：`GNSS-REQ`
-- 文档版本：1.0
+- 文档版本：1.1
 - 修订日期：2026-08-24
 - 状态：现行需求基线
 - UDP 输入协议：[`GNSSAgent-UDP-NMEA-Protocol-v1.md`](../../protocol/GNSSAgent-UDP-NMEA-Protocol-v1.md)
@@ -31,6 +31,7 @@
 
 | 版本 | 日期 | 说明 |
 |---|---|---|
+| 1.1 | 2026-08-24 | 补充 SIMPLE/FULL 订阅请求、订阅 ACK、消息类型和完整状态字段布局。 |
 | 1.0 | 2026-08-24 | 以 UDP 架构为基础，合并 2026-08-03 之后的运行、协议、构建、部署和验收变更，建立长期维护基线。 |
 
 ## 2. 背景、目标与范围
@@ -221,7 +222,7 @@ flowchart LR
 - `REQ-MODEL-002`：无效字段的载荷字节必须编码为 0；消费者不得通过数值是否为 0 判断有效性，因为 0 可以是合法值。
 - `REQ-MODEL-003`：`valid` 表示导航解是否可用，与字段能否解析是两个概念；时间字段有效性不依赖导航是否有效。
 - `REQ-MODEL-004`：输出不得包含 NaN 或 Infinity；超出协议类型范围的字段必须标记无效并编码为 0。
-- `REQ-MODEL-005`：FULL 和 SIMPLE 的精确字段、类型、掩码位、载荷长度与编码必须符合 TCP 状态协议 v1；本文件只定义字段来源和产品语义。
+- `REQ-MODEL-005`：FULL 和 SIMPLE 的字段、类型、掩码位、载荷长度与编码必须同时符合本文第 9 节和 TCP 状态协议 v1；两处内容必须在同一变更中保持一致。
 
 ### 8.3 时间、位置与导航有效性
 
@@ -266,6 +267,160 @@ target_at_client_receive = utc_time + (client_recv_time - recv_time)
 - `REQ-TIME-002`：该公式只补偿 `GNSSAgent` UDP 收包到本机消费者收包之间的聚合和传输延迟，不补偿 UART 转发延迟，也不适用于远程消费者。
 
 ## 9. TCP 订阅与二进制协议
+
+### 9.1 公共帧与消息类型
+
+所有消息使用 8 字节公共帧头：
+
+| 帧偏移 | 长度 | 字段 | v1 要求 |
+|---:|---:|---|---|
+| 0 | 4 | `magic` | ASCII `GNSS`，十六进制 `47 4E 53 53` |
+| 4 | 1 | `version` | `0x01` |
+| 5 | 1 | `message_type` | 见下表 |
+| 6 | 2 | `payload_length` | uint16，大端序，不含 8 字节帧头 |
+
+`GNSSAgent` 实际支持的消息如下：
+
+| 值 | 名称 | 方向 | 载荷长度 | 总帧长度 |
+|---:|---|---|---:|---:|
+| `0x01` | `SUBSCRIBE_REQUEST` | 客户端 → 服务端 | 1 | 9 |
+| `0x02` | `SUBSCRIBE_ACK` | 服务端 → 客户端 | 1 | 9 |
+| `0x03` | `GNSS_STATUS_FULL` | 服务端 → 客户端 | 124 | 132 |
+| `0x04` | `GNSS_STATUS_SIMPLE` | 服务端 → 客户端 | 58 | 66 |
+
+- `REQ-PROTO-001`：所有多字节整数和浮点位模式必须使用大端序；浮点必须使用 IEEE-754 binary32/binary64，并逐字段编码，不得发送编译器结构体内存布局。
+- `REQ-PROTO-002`：v1 帧不得增加 flags、sequence、reserved、CRC 或帧尾字段；单帧载荷不得超过 1024 字节。
+- `REQ-PROTO-003`：协议文档列出的 `0x10`、`0x11` 控制消息不属于 `GNSSAgent` 产品能力，处理规则只按 `REQ-TCP-007` 执行。
+
+### 9.2 SIMPLE/FULL 订阅与 ACK
+
+`SUBSCRIBE_REQUEST (0x01)` 的载荷固定为 1 字节：
+
+| 载荷偏移 | 长度 | 字段 | 值 | 服务端后续推送 |
+|---:|---:|---|---:|---|
+| 0 | 1 | `status_type` | `1` (`SIMPLE`) | `GNSS_STATUS_SIMPLE (0x04)` |
+| 0 | 1 | `status_type` | `2` (`FULL`) | `GNSS_STATUS_FULL (0x03)` |
+
+订阅 SIMPLE 的完整请求帧：
+
+```text
+47 4E 53 53 01 01 00 01 01
+```
+
+订阅 FULL 的完整请求帧：
+
+```text
+47 4E 53 53 01 01 00 01 02
+```
+
+- `REQ-PROTO-004`：`status_type` 只能为 1 或 2；其他值必须返回 `INVALID_STATUS_TYPE`，不得建立订阅。
+- `REQ-PROTO-005`：客户端必须在成功收到 `SUBSCRIBE_ACK` 后才把连接视为已订阅；一次连接只允许固定为一种状态格式。
+
+`SUBSCRIBE_ACK (0x02)` 的载荷固定为 1 字节 `result`：
+
+| 值 | 名称 | 含义 |
+|---:|---|---|
+| 0 | `SUCCESS` | 订阅成功 |
+| 1 | `SERVER_FULL` | 总连接数或非环回连接数达到上限 |
+| 2 | `ALREADY_SUBSCRIBED` | 当前连接已经订阅 |
+| 3 | `UNSUPPORTED_VERSION` | 不支持请求使用的协议版本 |
+| 4 | `INTERNAL_ERROR` | 服务端内部错误 |
+| 5 | `INVALID_STATUS_TYPE` | `status_type` 不是 1 或 2 |
+
+成功 ACK 的完整帧：
+
+```text
+47 4E 53 53 01 02 00 01 00
+```
+
+- `REQ-PROTO-006`：能够可靠解析为订阅请求但帧头版本不是 1 时，服务端必须用 v1 `SUBSCRIBE_ACK` 返回 `UNSUPPORTED_VERSION`；无法按 v1 安全理解的高版本帧按未知版本跳过。
+
+### 9.3 SIMPLE 状态消息
+
+`GNSS_STATUS_SIMPLE (0x04)` 载荷固定为 58 字节，完整帧固定为 66 字节：
+
+| 载荷偏移 | 长度 | 类型 | 有效位 | 字段 | 单位/含义 |
+|---:|---:|---|---:|---|---|
+| 0 | 8 | uint64 | — | `field_validity_mask` | 位 0–8 见本表，位 9–63 必须为 0 |
+| 8 | 8 | uint64 | 0 | `utc_time` | GNSS UTC，Unix epoch 毫秒 |
+| 16 | 8 | uint64 | 1 | `recv_time` | 服务端接收本周期首条有效输入的本机 Unix 毫秒时间 |
+| 24 | 8 | float64 | 2 | `latitude` | 纬度，度，范围 -90～90，北为正 |
+| 32 | 8 | float64 | 3 | `longitude` | 经度，度，范围 -180～180，东为正 |
+| 40 | 8 | float64 | 4 | `altitude_msl` | 相对平均海平面的海拔，米，可为负 |
+| 48 | 4 | float32 | 5 | `ground_speed_mps` | 地速，米/秒，非负 |
+| 52 | 4 | float32 | 6 | `course_over_ground_deg` | 地面航向，真北为 0°、顺时针，范围 `[0,360)` |
+| 56 | 1 | uint8 | 7 | `valid` | 0=导航解无效，1=导航解有效 |
+| 57 | 1 | uint8 | 8 | `used_satellites` | 参与定位的卫星总数 |
+
+SIMPLE 固定帧头：
+
+```text
+47 4E 53 53 01 04 00 3A
+```
+
+- `REQ-PROTO-007`：SIMPLE 有效位必须使用本表的独立 0–8 位定义，不得按 FULL 位号解释。
+
+### 9.4 FULL 状态消息
+
+`GNSS_STATUS_FULL (0x03)` 载荷固定为 124 字节，完整帧固定为 132 字节：
+
+| 载荷偏移 | 长度 | 类型 | 有效位 | 字段 | 单位/含义 |
+|---:|---:|---|---:|---|---|
+| 0 | 8 | uint64 | — | `field_validity_mask` | 位 0–28 见本表，位 29–63 必须为 0 |
+| 8 | 8 | uint64 | 0 | `utc_time` | GNSS UTC，Unix epoch 毫秒 |
+| 16 | 8 | uint64 | 1 | `recv_time` | 服务端接收本周期首条有效输入的本机 Unix 毫秒时间 |
+| 24 | 8 | float64 | 2 | `latitude` | 纬度，度，范围 -90～90，北为正 |
+| 32 | 8 | float64 | 3 | `longitude` | 经度，度，范围 -180～180，东为正 |
+| 40 | 8 | float64 | 4 | `altitude_msl` | 相对平均海平面的海拔，米，可为负 |
+| 48 | 8 | float64 | 5 | `altitude_ellipsoid` | 椭球高，米，可为负 |
+| 56 | 1 | uint8 | 6 | `valid` | 0=导航解无效，1=导航解有效 |
+| 57 | 1 | uint8 | 7 | `fix_dimension` | 1=无定位，2=2D，3=3D |
+| 58 | 1 | uint8 | 8 | `solution_type` | GGA quality：0–8 为标准值，9–255 为厂商扩展/未知 |
+| 59 | 1 | uint8 | 9 | `used_satellites` | 参与定位的卫星总数 |
+| 60 | 1 | uint8 | 10 | `gps_satellites` | 可见 GPS 卫星数 |
+| 61 | 1 | uint8 | 11 | `beidou_satellites` | 可见北斗卫星数 |
+| 62 | 1 | uint8 | 12 | `glonass_satellites` | 可见 GLONASS 卫星数 |
+| 63 | 1 | uint8 | 13 | `galileo_satellites` | 可见 Galileo 卫星数 |
+| 64 | 4 | float32 | 14 | `gga_hdop` | GGA HDOP，非负 |
+| 68 | 4 | float32 | 15 | `gsa_pdop` | GSA PDOP，非负 |
+| 72 | 4 | float32 | 16 | `gsa_hdop` | GSA HDOP，非负 |
+| 76 | 4 | float32 | 17 | `gsa_vdop` | GSA VDOP，非负 |
+| 80 | 4 | float32 | 18 | `differential_age` | 差分修正龄期，秒，非负；0 可以有效 |
+| 84 | 4 | float32 | 19 | `avg_used_cn0` | 参与定位卫星的平均 C/N0，dB-Hz |
+| 88 | 4 | float32 | 20 | `ground_speed_mps` | 地速，米/秒，非负 |
+| 92 | 4 | float32 | 21 | `course_over_ground_deg` | 地面航向，真北为 0°、顺时针，范围 `[0,360)` |
+| 96 | 4 | float32 | 22 | `gst_pseudorange_rms` | 伪距残差 RMS，米，非负 |
+| 100 | 4 | float32 | 23 | `gst_semi_major_error` | 误差椭圆半长轴 1σ，米，非负 |
+| 104 | 4 | float32 | 24 | `gst_semi_minor_error` | 误差椭圆半短轴 1σ，米，非负 |
+| 108 | 4 | float32 | 25 | `gst_orientation_deg` | 误差椭圆方向，度 |
+| 112 | 4 | float32 | 26 | `gst_latitude_error` | 纬度方向 1σ 误差，米，非负 |
+| 116 | 4 | float32 | 27 | `gst_longitude_error` | 经度方向 1σ 误差，米，非负 |
+| 120 | 4 | float32 | 28 | `gst_altitude_error` | 高度方向 1σ 误差，米，非负 |
+
+`solution_type` 取值：
+
+| 值 | 名称 | 含义 |
+|---:|---|---|
+| 0 | `INVALID` | 无效定位 |
+| 1 | `SINGLE` | 单点定位 |
+| 2 | `DIFFERENTIAL` | 差分定位，包括 DGNSS/SBAS |
+| 3 | `PPS_PRECISE` | PPS/高精度模式，接收机相关 |
+| 4 | `RTK_FIXED` | RTK 固定解 |
+| 5 | `RTK_FLOAT` | RTK 浮点解 |
+| 6 | `DEAD_RECKONING` | 航位推算 |
+| 7 | `MANUAL` | 手工输入 |
+| 8 | `SIMULATION` | 仿真模式 |
+| 9–255 | `VENDOR_DEFINED` | 厂商扩展或未知值，必须保留但不得擅自解释 |
+
+FULL 固定帧头：
+
+```text
+47 4E 53 53 01 03 00 7C
+```
+
+- `REQ-PROTO-008`：`solution_type` 的 0–8 必须按 TCP 状态协议 v1 枚举解释；9–255 必须保留为厂商扩展或未知值，消费者不得擅自映射。
+
+### 9.5 会话与发布规则
 
 - `REQ-TCP-001`：TCP 默认监听 `0.0.0.0:29501`，总连接数最多 5，非环回连接最多 4，必须为至少一个本机连接保留容量。
 - `REQ-TCP-002`：客户端连接后的第一个有效应用消息必须是 `SUBSCRIBE_REQUEST`，并在 5 秒内选择 SIMPLE 或 FULL；超时或非法订阅必须关闭连接。
