@@ -4,12 +4,12 @@ set -eu
 repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 tmp_dir=$(mktemp -d)
 project_dir="$tmp_dir/project"
-make_dir="$project_dir/build/scripts/make"
+make_dir="$project_dir/build/make"
 outside_dir="$tmp_dir/outside"
 
 mkdir -p "$make_dir" "$outside_dir"
 for file in makefile makefile_CCU makefile_HF makefile_MultibandRadio makefile_MultibandHandheld makefile_SmallRadio; do
-    cp "$repo_dir/build/scripts/make/$file" "$make_dir/$file"
+    cp "$repo_dir/build/make/$file" "$make_dir/$file"
 done
 
 fail() {
@@ -67,11 +67,11 @@ done
 
 for makefile in makefile makefile_CCU makefile_HF makefile_MultibandRadio makefile_MultibandHandheld makefile_SmallRadio; do
     make -f "$make_dir/$makefile" install >/dev/null
-    [ ! -e "$project_dir/build/dist" ] || fail "$makefile install changed the output directory"
+    [ ! -e "$project_dir/release" ] || fail "$makefile install changed the output directory"
 done
 
 artifact_names='GNSSAgent-CCU GNSSAgent-MultibandRadio GNSSAgent-MultibandHandheld GNSSAgent-SmallRadio GNSSAgent-HF'
-dist_dir="$project_dir/build/dist/bin"
+dist_dir="$project_dir/release"
 
 reset_artifacts() {
     mkdir -p "$dist_dir"
@@ -138,7 +138,7 @@ make_system_go() {
     chmod +x "$directory/go"
 }
 
-compiler_dir="$project_dir/build/compiler"
+compiler_dir="$project_dir/res"
 mkdir -p "$compiler_dir"
 archive126="$compiler_dir/fake-go126.tar.gz"
 archive123="$compiler_dir/fake-go123.tar.gz"
@@ -341,7 +341,7 @@ if [ -f "$event_log" ] && grep -q '^bundled-build$' "$event_log"; then
 fi
 
 space_project="$tmp_dir/project with spaces"
-space_make_dir="$space_project/build/scripts/make"
+space_make_dir="$space_project/build/make"
 mkdir -p "$space_make_dir"
 for file in makefile makefile_CCU makefile_HF makefile_MultibandRadio makefile_MultibandHandheld makefile_SmallRadio; do
     cp "$make_dir/$file" "$space_make_dir/$file"
@@ -349,7 +349,7 @@ for file in makefile makefile_CCU makefile_HF makefile_MultibandRadio makefile_M
         fail "$file accepted a whitespace-containing path"
     fi
     grep -q 'Makefile paths do not support whitespace' "$tmp_dir/space-error" || fail "$file did not explain whitespace rejection"
-    if (cd "$space_project" && make -n -f "build/scripts/make/$file") >/dev/null 2>"$tmp_dir/space-error"; then
+    if (cd "$space_project" && make -n -f "build/make/$file") >/dev/null 2>"$tmp_dir/space-error"; then
         fail "$file accepted a relative Makefile path from a whitespace-containing directory"
     fi
     grep -q 'Makefile paths do not support whitespace' "$tmp_dir/space-error" || fail "$file did not explain relative whitespace rejection"

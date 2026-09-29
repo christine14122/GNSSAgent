@@ -1,7 +1,7 @@
 $ErrorActionPreference = "Stop"
 $projectRoot = Split-Path -Parent $PSScriptRoot
-$powerShellDirectory = Join-Path $projectRoot "build\scripts\powershell"
-$makeDirectory = Join-Path $projectRoot "build\scripts\make"
+$powerShellDirectory = Join-Path $projectRoot "build\powershell"
+$makeDirectory = Join-Path $projectRoot "build\make"
 $mainScript = Join-Path $powerShellDirectory "build.ps1"
 $hfScript = Join-Path $powerShellDirectory "build-hf.ps1"
 $primaryMakefile = Join-Path $makeDirectory "makefile"

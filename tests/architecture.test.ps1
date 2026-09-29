@@ -56,7 +56,7 @@ foreach ($text in @('ParseSwitchRequest', 'EncodeSwitchACK', 'control handler'))
 
 $deploymentFiles = @(
     Get-ChildItem -LiteralPath (Join-Path $projectRoot 'deploy') -Recurse -File
-    Get-ChildItem -LiteralPath (Join-Path $projectRoot 'build\scripts') -Recurse -File
+    Get-ChildItem -LiteralPath (Join-Path $projectRoot 'build') -Recurse -File
     Get-Item -LiteralPath (Join-Path $projectRoot 'tests\device\smoke.sh')
 )
 $deploymentText = ($deploymentFiles | ForEach-Object { Get-Content -LiteralPath $_.FullName -Raw }) -join "`n"

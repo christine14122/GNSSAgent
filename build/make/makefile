@@ -11,9 +11,9 @@ endif
 endif
 
 MAKE_DIR := $(dir $(abspath $(MAKEFILE_PATH)))
-PROJECT_ROOT := $(abspath $(MAKE_DIR)/../../..)
-COMPILER_DIR := $(PROJECT_ROOT)/build/compiler
-DIST_DIR := $(PROJECT_ROOT)/build/dist/bin
+PROJECT_ROOT := $(abspath $(MAKE_DIR)/../..)
+COMPILER_DIR := $(PROJECT_ROOT)/res
+DIST_DIR := $(PROJECT_ROOT)/release
 MAIN_PACKAGE := ./cmd/gnssagent
 BUILD_FLAGS := -trimpath -buildvcs=false
 LINK_FLAGS := -s -w

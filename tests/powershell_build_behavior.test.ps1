@@ -1,8 +1,8 @@
 $ErrorActionPreference = "Stop"
 $projectRoot = Split-Path -Parent $PSScriptRoot
-$sourceDirectory = Join-Path $projectRoot "build\scripts\powershell"
+$sourceDirectory = Join-Path $projectRoot "build\powershell"
 $temporaryRoot = Join-Path ([IO.Path]::GetTempPath()) ("gnssagent-powershell-build-" + [guid]::NewGuid().ToString("N"))
-$fixtureDirectory = Join-Path $temporaryRoot "project\build\scripts\powershell"
+$fixtureDirectory = Join-Path $temporaryRoot "project\build\powershell"
 $fakeBin = Join-Path $temporaryRoot "fake-bin"
 $fakeLog = Join-Path $temporaryRoot "fake-go.log"
 
@@ -68,7 +68,9 @@ try {
     $env:FAKE_GO_VERSION = "go9.9.9"
     $env:FAKE_GO_FAIL = ""
     $env:GOMIPS = "caller-sentinel"
-    & (Join-Path $fixtureDirectory "build.ps1") -OutputDirectory (Join-Path $temporaryRoot "ordinary-success")
+    & (Join-Path $fixtureDirectory "build.ps1")
+    Assert-Equal (Test-Path -LiteralPath (Join-Path $temporaryRoot "project\release")) $true "Default output directory is not release"
+    Assert-Equal (Test-Path -LiteralPath (Join-Path $temporaryRoot "project\build\dist")) $false "Build created the legacy output directory"
     $calls = @(Get-Content -LiteralPath $fakeLog)
     Assert-Equal $calls.Count 5 "Ordinary system Go did not run test plus four builds exactly once"
     Assert-Equal (@($calls | Where-Object { $_ -eq "test" }).Count) 1 "Ordinary tests were not run once"
@@ -116,7 +118,7 @@ try {
     Clear-Content -LiteralPath $fakeLog
     $env:FAKE_GO_VERSION = "go9.9.9"
     $env:FAKE_GO_FAIL = ""
-    $fixtureCompiler = Join-Path $temporaryRoot "project\build\compiler"
+    $fixtureCompiler = Join-Path $temporaryRoot "project\res"
     New-Item -ItemType Directory -Force -Path $fixtureCompiler | Out-Null
     Set-Content -LiteralPath (Join-Path $fixtureCompiler "go1.23.12.windows-amd64.zip") `
         -Value "invalid archive" -Encoding ASCII

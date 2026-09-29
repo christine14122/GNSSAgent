@@ -116,7 +116,7 @@ flowchart LR
 
 - `REQ-BUILD-001`：源码语言基线必须保持为 Go 1.23，不得无评审依赖 Go 1.24 及以上才提供的语言或标准库能力。
 - `REQ-BUILD-002`：所有设备产物必须设置 `CGO_ENABLED=0`，使用 `-trimpath` 和 `-ldflags="-s -w"`，并把表中构建标识写入 `gnssagent/internal/buildinfo.Target`。
-- `REQ-BUILD-003`：Linux Make 与 Windows PowerShell 必须产出相同名称和目标架构的设备文件，统一写入 `build/dist/bin/`。
+- `REQ-BUILD-003`：Linux Make 与 Windows PowerShell 必须产出相同名称和目标架构的设备文件，统一写入 `release/`。
 - `REQ-BUILD-004`：普通目标优先使用可用的系统 Go；系统 Go 不存在时必须使用已校验的内置 Go 1.26.4。Linux 普通目标在系统 Go 命令失败后可以用内置 Go 重试一次；PowerShell 选定工具链后不得因构建失败切换工具链重试。
 - `REQ-BUILD-005`：HF 只能使用精确的 Go 1.23.12 系统工具链或已校验的内置 Go 1.23.12；选定工具链后的实际构建只执行一次。
 - `REQ-BUILD-006`：构建工具不得隐式下载 Go 工具链；内置归档缺失、哈希不符、解压失败或版本不符时必须失败关闭。

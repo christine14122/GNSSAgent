@@ -9,19 +9,19 @@ endif
 endif
 
 MAKE_DIR := $(dir $(abspath $(MAKEFILE_PATH)))
-PROJECT_ROOT := $(abspath $(MAKE_DIR)/../../..)
-DIST_DIR := $(PROJECT_ROOT)/build/dist/bin
+PROJECT_ROOT := $(abspath $(MAKE_DIR)/../..)
+DIST_DIR := $(PROJECT_ROOT)/release
 .DEFAULT_GOAL := all
-.PHONY: all multiband-handheld clean install
+.PHONY: all hf clean install
 
-all: multiband-handheld
+all: hf
 
-multiband-handheld:
+hf:
 
-	$(MAKE) --no-print-directory -f "$(MAKE_DIR)/makefile" multiband-handheld
+	$(MAKE) --no-print-directory -f "$(MAKE_DIR)/makefile" hf
 
 clean:
 
-	rm -f "$(DIST_DIR)/GNSSAgent-MultibandHandheld"
+	rm -f "$(DIST_DIR)/GNSSAgent-HF"
 
 install:

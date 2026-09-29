@@ -1,12 +1,12 @@
 param(
-    [string]$OutputDirectory = "build\dist\bin"
+    [string]$OutputDirectory = "release"
 )
 
 $ErrorActionPreference = "Stop"
-$projectRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
-$compilerArchive = Join-Path $projectRoot "build\compiler\go1.23.12.windows-amd64.zip"
+$projectRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+$compilerArchive = Join-Path $projectRoot "res\go1.23.12.windows-amd64.zip"
 $compilerArchiveSha256 = "07c35866cdd864b81bb6f1cfbf25ac7f87ddc3a976ede1bf5112acbb12dfe6dc"
-$compilerRoot = Join-Path $projectRoot "build\compiler\.go1.23.12-windows-amd64"
+$compilerRoot = Join-Path $projectRoot "res\.go1.23.12-windows-amd64"
 $bundledGoExe = Join-Path $compilerRoot "go\bin\go.exe"
 
 if ([IO.Path]::IsPathRooted($OutputDirectory)) {

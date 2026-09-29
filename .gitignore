@@ -1,8 +1,8 @@
 /.worktrees/
-/build/dist/
-/build/compiler/.go*/
-/build/compiler/*.zip
-/build/compiler/*.tar.gz
+/release/
+/res/.go*/
+/res/*.zip
+/res/*.tar.gz
 *.test
 *.out
 coverage.txt
