@@ -117,7 +117,7 @@ flowchart LR
 - `REQ-BUILD-001`：源码语言基线必须保持为 Go 1.23，不得无评审依赖 Go 1.24 及以上才提供的语言或标准库能力。
 - `REQ-BUILD-002`：所有设备产物必须设置 `CGO_ENABLED=0`，使用 `-trimpath` 和 `-ldflags="-s -w"`，并把表中构建标识写入 `gnssagent/internal/buildinfo.Target`。
 - `REQ-BUILD-003`：Linux Make 与 Windows PowerShell 必须产出相同名称和目标架构的设备文件，统一写入 `release/`。
-- `REQ-BUILD-004`：普通目标优先使用可用的系统 Go；系统 Go 不存在时必须使用已校验的内置 Go 1.26.4。Linux 普通目标在系统 Go 命令失败后可以用内置 Go 重试一次；PowerShell 选定工具链后不得因构建失败切换工具链重试。
+- `REQ-BUILD-004`：普通目标优先使用可用的系统 Go；Linux 先查找 PATH，再检查 `/opt/go/bin/go` 及其标准库文件。系统 Go 不存在时必须使用已校验的内置 Go 1.26.4。Linux Make 与 PowerShell 选定工具链后，测试或编译失败必须直接返回错误，不得切换工具链重试。
 - `REQ-BUILD-005`：HF 只能使用精确的 Go 1.23.12 系统工具链或已校验的内置 Go 1.23.12；选定工具链后的实际构建只执行一次。
 - `REQ-BUILD-006`：构建工具不得隐式下载 Go 工具链；内置归档缺失、哈希不符、解压失败或版本不符时必须失败关闭。
 - `REQ-BUILD-007`：构建脚本必须恢复调用前的进程环境，不得把 `GOARCH`、`GOARM`、`GOARM64`、`GOMIPS`、`GOROOT` 或 `GOTOOLCHAIN` 泄漏给后续命令。
@@ -676,7 +676,7 @@ FULL 固定帧头：
 
 - Linux 主 Makefile 和五个单目标封装必须映射到正确输出、架构参数和 `buildinfo.Target`；默认全量构建包含五个目标。
 - PowerShell 必须构建四个普通目标和独立 HF 目标，覆盖系统 Go、内置 Go、哈希错误、缺失归档、错误版本、命令失败和环境恢复。
-- Linux 普通目标覆盖系统 Go 成功、系统 Go 缺失、系统 Go 失败后内置重试成功，以及两次都失败且不执行第三次。
+- Linux 普通目标覆盖系统 Go 成功、PATH 与 `/opt/go` 查找顺序、系统 Go 缺失时使用内置工具链，以及系统 Go 测试或编译失败后直接退出且不准备或执行内置工具链。
 - HF 覆盖精确系统 Go 1.23.12、版本不匹配时选择内置 Go，以及实际构建失败后不切换工具链。
 - 使用 `file`/`readelf` 或等价工具核对五个产物的 ELF class、端序、架构、ABI 和静态链接属性。
 - SysV 测试覆盖缺失二进制、陈旧 PID、PID 指向非本监护进程、重复启动、正常停止、子进程崩溃、1–30 秒重启退避和运行 60 秒后的退避重置。

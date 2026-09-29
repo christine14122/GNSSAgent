@@ -66,6 +66,8 @@ for wrapper_target in ccu hf multiband-radio multiband-handheld small-radio; do
 done
 
 for makefile in makefile makefile_CCU makefile_HF makefile_MultibandRadio makefile_MultibandHandheld makefile_SmallRadio; do
+    # MultibandRadio now installs into the caller's Bin directory.
+    [ "$makefile" != makefile_MultibandRadio ] || continue
     make -f "$make_dir/$makefile" install >/dev/null
     [ ! -e "$project_dir/release" ] || fail "$makefile install changed the output directory"
 done
@@ -168,19 +170,22 @@ FAKE_SYSTEM_LOG="$system_log" FAKE_SYSTEM_FAIL=0 \
 
 : > "$system_log"
 : > "$bundled_log"
-FAKE_SYSTEM_LOG="$system_log" FAKE_SYSTEM_FAIL=1 FAKE_EVENT_LOG="$bundled_log" \
-    run_make "$tmp_dir/fallback126" "$tmp_dir/fallback123" SYSTEM_GO="$system_bin/go" ccu
+if FAKE_SYSTEM_LOG="$system_log" FAKE_SYSTEM_FAIL=1 FAKE_EVENT_LOG="$bundled_log" \
+    run_make "$tmp_dir/fallback126" "$tmp_dir/fallback123" SYSTEM_GO="$system_bin/go" ccu; then
+    fail 'failed system Go build was accepted'
+fi
 [ "$(grep -c '^system-build$' "$system_log")" = 1 ] || fail 'system Go failure was not attempted once'
-[ "$(grep -c '^bundled-build$' "$bundled_log")" = 1 ] || fail 'bundled Go fallback was not attempted once'
+[ ! -s "$bundled_log" ] || fail 'failed system Go build retried with bundled Go'
+[ ! -e "$tmp_dir/fallback126" ] || fail 'failed system Go build prepared bundled Go'
 
 : > "$system_log"
 : > "$bundled_log"
 if FAKE_SYSTEM_LOG="$system_log" FAKE_SYSTEM_FAIL=1 FAKE_EVENT_LOG="$bundled_log" FAKE_BUILD_FAIL=1 \
     run_make "$tmp_dir/fail126" "$tmp_dir/fail123" SYSTEM_GO="$system_bin/go" ccu; then
-    fail 'two failed ordinary Go attempts were accepted'
+    fail 'failed ordinary Go build was accepted'
 fi
 [ "$(grep -c '^system-build$' "$system_log")" = 1 ] || fail 'failed system Go ran more than once'
-[ "$(grep -c '^bundled-build$' "$bundled_log")" = 1 ] || fail 'failed bundled Go ran more than once'
+[ ! -s "$bundled_log" ] || fail 'failed ordinary Go build used bundled Go'
 
 : > "$bundled_log"
 FAKE_EVENT_LOG="$bundled_log" run_make "$tmp_dir/no-system126" "$tmp_dir/no-system123" SYSTEM_GO= ccu
@@ -188,10 +193,12 @@ FAKE_EVENT_LOG="$bundled_log" run_make "$tmp_dir/no-system126" "$tmp_dir/no-syst
 
 : > "$system_log"
 : > "$bundled_log"
-FAKE_SYSTEM_LOG="$system_log" FAKE_SYSTEM_FAIL=1 FAKE_EVENT_LOG="$bundled_log" \
-    run_make "$tmp_dir/test-fallback126" "$tmp_dir/test-fallback123" SYSTEM_GO="$system_bin/go" test
+if FAKE_SYSTEM_LOG="$system_log" FAKE_SYSTEM_FAIL=1 FAKE_EVENT_LOG="$bundled_log" \
+    run_make "$tmp_dir/test-fallback126" "$tmp_dir/test-fallback123" SYSTEM_GO="$system_bin/go" test; then
+    fail 'failed system Go tests were accepted'
+fi
 [ "$(grep -c '^system-test$' "$system_log")" = 1 ] || fail 'failed system Go test was not attempted once'
-[ "$(grep -c '^bundled-test$' "$bundled_log")" = 1 ] || fail 'bundled Go test fallback was not attempted once'
+[ ! -s "$bundled_log" ] || fail 'failed system Go tests retried with bundled Go'
 
 hf_exact_bin="$tmp_dir/hf-exact-bin"
 hf_wrong_bin="$tmp_dir/hf-wrong-bin"
