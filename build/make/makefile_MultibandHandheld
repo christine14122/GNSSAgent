@@ -1,3 +1,4 @@
+# Go selection is shared with makefile: PATH, then /opt/go, then res. No retry after build failure.
 ifneq ($(words $(MAKEFILE_LIST)),1)
 $(error Makefile paths do not support whitespace)
 endif
