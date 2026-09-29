@@ -25,3 +25,4 @@ clean:
 	rm -f "$(DIST_DIR)/GNSSAgent-MultibandRadio"
 
 install:
+	@cp ../release/GNSSAgent-MultibandRadio ./../../Bin/GNSSAgent
