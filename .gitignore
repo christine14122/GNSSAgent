@@ -6,3 +6,10 @@
 *.test
 *.out
 coverage.txt
+
+# Local tool state and architecture drafts
+/.codegraph/
+/.superpowers/
+
+# Local pre-merge backup
+/tools/gnss_survey.py.pre-merge-20260818
