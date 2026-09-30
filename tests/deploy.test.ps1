@@ -20,14 +20,21 @@ $rotating = Get-Content -LiteralPath $rotatingPath -Raw
 $plan = Get-Content -LiteralPath $planPath -Raw
 
 $requiredDefaults = @(
-    'UDP_LISTEN=127.0.0.1:29501',
+    'UDP_LISTEN=0.0.0.0:29501',
     'TCP_LISTEN=0.0.0.0:29501',
     'MAX_CONNECTIONS=5',
     'MAX_REMOTE_CONNECTIONS=4',
     'LOG_LEVEL=info',
     'LOG_FILE=/lib/firmware/gnssagent/log/gnssagent.log',
     'LOG_MAX_BYTES=8388608',
-    'CONSOLE_LOG=/var/volatile/gnssagent-console.log'
+    'CONSOLE_LOG=/var/volatile/gnssagent-console.log',
+    'TIME_RMS_ENTER=2',
+    'TIME_RMS_EXIT=5',
+    'TIME_RMS_SPREAD=1',
+    'TIME_CONFIRM_CYCLES=10',
+    'TIME_EXIT_CYCLES=3',
+    'TIME_GST_TIMEOUT=3s',
+    'TIME_STEP_TOLERANCE=500ms'
 )
 foreach ($text in $requiredDefaults) {
     if (-not $defaults.Contains($text)) {
@@ -64,6 +71,13 @@ foreach ($text in @(
     '--log-level "$LOG_LEVEL"',
     '--log-file "$LOG_FILE"',
     '--log-max-bytes "$LOG_MAX_BYTES"',
+    '--time-rms-enter "$TIME_RMS_ENTER"',
+    '--time-rms-exit "$TIME_RMS_EXIT"',
+    '--time-rms-spread "$TIME_RMS_SPREAD"',
+    '--time-confirm-cycles "$TIME_CONFIRM_CYCLES"',
+    '--time-exit-cycles "$TIME_EXIT_CYCLES"',
+    '--time-gst-timeout "$TIME_GST_TIMEOUT"',
+    '--time-step-tolerance "$TIME_STEP_TOLERANCE"',
     '__gnssagent_supervise__',
     'nohup /bin/sh "$SCRIPT_PATH" "$SUPERVISOR_TOKEN"',
     'exec 3>"$CONSOLE_LOG"',

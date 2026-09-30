@@ -5,6 +5,7 @@ import (
 
 	"gnssagent/internal/model"
 	"gnssagent/internal/nmea"
+	"gnssagent/internal/timequality"
 )
 
 const flushDelay = 1500 * time.Millisecond
@@ -19,10 +20,19 @@ type Aggregator struct {
 	completedSecond    int64
 	hasCompletedSecond bool
 	completedAt        time.Time
+	quality            *timequality.Tracker
+	qualityConfig      timequality.Config
+	lastQuality        model.FullStatus
+	lastUTCRange       utcRange
+	qualityFailure     timequality.Reason
 }
 
-func New() *Aggregator {
-	return &Aggregator{}
+func New(options ...timequality.Config) *Aggregator {
+	cfg := timequality.DefaultConfig()
+	if len(options) != 0 {
+		cfg = options[0]
+	}
+	return &Aggregator{quality: timequality.New(cfg), qualityConfig: cfg}
 }
 
 func (a *Aggregator) Add(sentence nmea.Sentence) (model.FullStatus, bool) {
@@ -32,6 +42,7 @@ func (a *Aggregator) Add(sentence nmea.Sentence) (model.FullStatus, bool) {
 	}
 	if a.current == nil {
 		if timed && a.hasCompletedSecond && !secondIsForward(a.completedSecond, second) {
+			a.rejectTimeQuality(sentence)
 			return model.FullStatus{}, false
 		}
 		a.current = newCycle(sentence, second, timed)
@@ -44,14 +55,16 @@ func (a *Aggregator) Add(sentence nmea.Sentence) (model.FullStatus, bool) {
 			return model.FullStatus{}, false
 		}
 		if !secondIsForward(a.current.second, second) {
+			a.rejectTimeQuality(sentence)
 			return model.FullStatus{}, false
 		}
-		completed := a.current.status()
+		completed := a.completeCycle()
 		a.setCompletedGuard(a.current.second, sentence.ReceivedAt)
 		a.current = newCycle(sentence, second, true)
 		return completed, true
 	} else if timed {
 		if a.hasCompletedSecond && !secondIsForward(a.completedSecond, second) {
+			a.rejectTimeQuality(sentence)
 			return model.FullStatus{}, false
 		}
 		a.current.second = second
@@ -65,7 +78,7 @@ func (a *Aggregator) FlushExpired(now time.Time) (model.FullStatus, bool) {
 	if a.current == nil || now.Sub(a.current.firstReceivedAt) < flushDelay {
 		return model.FullStatus{}, false
 	}
-	completed := a.current.status()
+	completed := a.completeCycle()
 	if a.current.hasSecond {
 		a.setCompletedGuard(a.current.second, now)
 	}
@@ -78,6 +91,10 @@ func (a *Aggregator) Clear() {
 	a.completedSecond = 0
 	a.hasCompletedSecond = false
 	a.completedAt = time.Time{}
+	a.quality.Reset()
+	a.lastQuality = model.FullStatus{}
+	a.lastUTCRange = utcRange{}
+	a.qualityFailure = 0
 }
 
 func (a *Aggregator) setCompletedGuard(second int64, completedAt time.Time) {

@@ -9,7 +9,7 @@ import (
 
 type subscriber struct {
 	statusType protocol.StatusType
-	queue      chan []byte
+	queue      chan model.FullStatus
 	done       chan struct{}
 	closeOnce  sync.Once
 }
@@ -17,12 +17,12 @@ type subscriber struct {
 func newSubscriber(statusType protocol.StatusType) *subscriber {
 	return &subscriber{
 		statusType: statusType,
-		queue:      make(chan []byte, 1),
+		queue:      make(chan model.FullStatus, 1),
 		done:       make(chan struct{}),
 	}
 }
 
-func (s *subscriber) offer(frame []byte) bool {
+func (s *subscriber) offer(status model.FullStatus) bool {
 	select {
 	case <-s.done:
 		return false
@@ -30,7 +30,7 @@ func (s *subscriber) offer(frame []byte) bool {
 	}
 
 	select {
-	case s.queue <- frame:
+	case s.queue <- status:
 		return false
 	default:
 	}
@@ -42,7 +42,7 @@ func (s *subscriber) offer(frame []byte) bool {
 	}
 	select {
 	case <-s.done:
-	case s.queue <- frame:
+	case s.queue <- status:
 	default:
 	}
 	return replaced
@@ -93,24 +93,9 @@ func (h *Hub) Publish(status model.FullStatus) {
 		return
 	}
 
-	var simpleFrame []byte
-	var fullFrame []byte
 	for _, subscriber := range subscribers {
-		switch subscriber.statusType {
-		case protocol.StatusSimple:
-			if simpleFrame == nil {
-				simpleFrame = protocol.EncodeSimple(status.Simple())
-			}
-			if subscriber.offer(simpleFrame) && observer != nil {
-				observer.RecordSlowClientReplacement()
-			}
-		case protocol.StatusFull:
-			if fullFrame == nil {
-				fullFrame = protocol.EncodeFull(status)
-			}
-			if subscriber.offer(fullFrame) && observer != nil {
-				observer.RecordSlowClientReplacement()
-			}
+		if subscriber.offer(status) && observer != nil {
+			observer.RecordSlowClientReplacement()
 		}
 	}
 }

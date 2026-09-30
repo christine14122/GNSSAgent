@@ -11,6 +11,7 @@ import (
 	"gnssagent/internal/model"
 	"gnssagent/internal/nmea"
 	"gnssagent/internal/observe"
+	"gnssagent/internal/timequality"
 	"gnssagent/internal/udpinput"
 )
 
@@ -94,8 +95,12 @@ type App struct {
 	summaryInterval int
 }
 
-func New(input UDPInput, server StatusServer, stats *observe.Stats, logger *slog.Logger) *App {
-	return newApp(input, server, stats, logger, realTicker{ticker: time.NewTicker(time.Second)}, newRealDeadlineTimer(), time.Now)
+func New(input UDPInput, server StatusServer, stats *observe.Stats, logger *slog.Logger, options ...timequality.Config) *App {
+	a := newApp(input, server, stats, logger, realTicker{ticker: time.NewTicker(time.Second)}, newRealDeadlineTimer(), time.Now)
+	if len(options) != 0 {
+		a.aggregator = aggregate.New(options[0])
+	}
+	return a
 }
 
 func newApp(input UDPInput, server StatusServer, stats *observe.Stats, logger *slog.Logger, ticker intervalTicker, flushTimer deadlineTimer, clock func() time.Time) *App {
@@ -190,6 +195,7 @@ func (a *App) publishLoop(ctx context.Context) {
 				if !ok {
 					break
 				}
+				status.TimeQuality.Expire(a.clock())
 				a.server.Publish(status)
 				a.stats.RecordPublishedCycle()
 			}
@@ -226,6 +232,14 @@ func (a *App) nextStatus() (model.FullStatus, bool) {
 }
 
 func (a *App) onTick(now time.Time) {
+	a.aggregateMu.Lock()
+	a.aggregator.ExpireTimeQuality(now)
+	a.aggregateMu.Unlock()
+	a.publishMu.Lock()
+	for i := range a.publishQueue {
+		a.publishQueue[i].TimeQuality.Expire(now)
+	}
+	a.publishMu.Unlock()
 	snapshot := a.stats.SnapshotReset()
 	if a.logger.Enabled(context.Background(), slog.LevelDebug) {
 		a.logger.Debug("one-second input summary",

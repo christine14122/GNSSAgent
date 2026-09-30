@@ -476,7 +476,7 @@ func startAppHarness(t *testing.T, level slog.Level) *appHarness {
 	return startAppHarnessWithGate(t, level, nil)
 }
 
-func startAppHarnessWithGate(t *testing.T, level slog.Level, gate <-chan struct{}) *appHarness {
+func startAppHarnessWithGate(t *testing.T, level slog.Level, gate <-chan struct{}, clocks ...func() time.Time) *appHarness {
 	t.Helper()
 	input := newFakeUDPInput()
 	server := newFakeStatusServer()
@@ -486,7 +486,11 @@ func startAppHarnessWithGate(t *testing.T, level slog.Level, gate <-chan struct{
 	logs := &synchronizedBuffer{}
 	logger := slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: level}))
 	startedAt := time.Date(2026, 8, 15, 0, 0, 0, 0, time.UTC)
-	app := newApp(input, server, observe.NewStats(), logger, ticker, flushTimer, func() time.Time { return startedAt })
+	clock := func() time.Time { return startedAt }
+	if len(clocks) != 0 {
+		clock = clocks[0]
+	}
+	app := newApp(input, server, observe.NewStats(), logger, ticker, flushTimer, clock)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- app.Run(ctx) }()

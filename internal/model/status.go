@@ -30,6 +30,7 @@ const (
 	FullGSTLatitudeErrorValid
 	FullGSTLongitudeErrorValid
 	FullGSTAltitudeErrorValid
+	FullTimeRMSValid
 )
 
 const (
@@ -75,6 +76,7 @@ type FullStatus struct {
 	GSTLatitudeError    float32
 	GSTLongitudeError   float32
 	GSTAltitudeError    float32
+	TimeQuality         TimeQuality
 }
 
 type SimpleStatus struct {
@@ -88,10 +90,11 @@ type SimpleStatus struct {
 	CourseOverGroundDeg float32
 	Valid               uint8
 	UsedSatellites      uint8
+	TimeQuality         TimeQuality
 }
 
 func (s FullStatus) Simple() SimpleStatus {
-	var out SimpleStatus
+	out := SimpleStatus{TimeQuality: s.TimeQuality}
 	copyField := func(fullBit, simpleBit uint64, copyValue func()) {
 		if s.FieldValidityMask&fullBit != 0 {
 			out.FieldValidityMask |= simpleBit

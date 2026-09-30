@@ -16,6 +16,7 @@ import (
 	"gnssagent/internal/observe"
 	"gnssagent/internal/protocol"
 	statusserver "gnssagent/internal/server"
+	"gnssagent/internal/timequality"
 	"gnssagent/internal/udpinput"
 )
 
@@ -31,8 +32,8 @@ func TestLoopbackEndToEndSimpleStatusAndSilentSwitch(t *testing.T) {
 	sendDatagram(t, sender, nmeaFrame("GNGGA,123520.00,3112.0000,N,12130.0000,E,1,08,0.9,12.3,M,0.0,M,,"))
 
 	frame := readWireFrame(t, client, time.Second)
-	if frame[5] != protocol.TypeStatusSimple || len(frame) != 66 {
-		t.Fatalf("status type/length = %#x/%d, want SIMPLE/66", frame[5], len(frame))
+	if frame[4] != 2 || frame[5] != protocol.TypeStatusSimple || len(frame) != 72 {
+		t.Fatalf("status type/length = %#x/%d, want v2 SIMPLE/72", frame[5], len(frame))
 	}
 	mask := binary.BigEndian.Uint64(frame[8:16])
 	if mask&(model.SimpleLatitudeValid|model.SimpleLongitudeValid|model.SimpleValidValid) != model.SimpleLatitudeValid|model.SimpleLongitudeValid|model.SimpleValidValid {
@@ -99,7 +100,7 @@ type integrationHarness struct {
 	done       chan error
 }
 
-func startIntegrationHarness(t *testing.T) *integrationHarness {
+func startIntegrationHarness(t *testing.T, options ...timequality.Config) *integrationHarness {
 	t.Helper()
 	udpAddress := reserveUDPAddress(t)
 	tcpAddress := reserveTCPAddress(t)
@@ -108,7 +109,7 @@ func startIntegrationHarness(t *testing.T) *integrationHarness {
 	statusServer.SetObserver(stats)
 	manager := udpinput.NewManager(udpAddress)
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	service := New(manager, statusServer, stats, logger)
+	service := New(manager, statusServer, stats, logger, options...)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- service.Run(ctx) }()

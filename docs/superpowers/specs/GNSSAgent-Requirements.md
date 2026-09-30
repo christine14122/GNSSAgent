@@ -1,11 +1,11 @@
 # GNSSAgent 需求规格
 
 - 文档标识：`GNSS-REQ`
-- 文档版本：1.2
-- 修订日期：2026-08-24
+- 文档版本：1.3
+- 修订日期：2026-09-30
 - 状态：现行需求基线
 - UDP 输入协议：[`GNSSAgent-UDP-NMEA-Protocol-v1.md`](../../protocol/GNSSAgent-UDP-NMEA-Protocol-v1.md)
-- TCP 状态协议：[`GNSSAgent-Binary-Protocol-v1.md`](../../protocol/GNSSAgent-Binary-Protocol-v1.md)
+- TCP 状态协议：[`GNSSAgent-Binary-Protocol-v2.md`](../../protocol/GNSSAgent-Binary-Protocol-v2.md)
 - 设备验收方案：[`GNSSAgent-Device-GNSS-UDP-Test-Plan.md`](../../testing/GNSSAgent-Device-GNSS-UDP-Test-Plan.md)
 
 ## 1. 文档控制
@@ -31,6 +31,7 @@
 
 | 版本 | 日期 | 说明 |
 |---|---|---|
+| 1.3 | 2026-09-30 | 增加 GST RMS 时间可信度与可配置门限；TCP 升级 v2，时间质量直接嵌入 SIMPLE/FULL；断流无推送，由客户端自行超时。 |
 | 1.2 | 2026-08-25 | 按 8.3 基线的细节层级补回聚合判定、卫星消歧、DOP 算法、测试矩阵、实机验收步骤和设备事实。 |
 | 1.1 | 2026-08-24 | 补充 SIMPLE/FULL 订阅请求、订阅 ACK、消息类型和完整状态字段布局。 |
 | 1.0 | 2026-08-24 | 以 UDP 架构为基础，合并 2026-08-03 之后的运行、协议、构建、部署和验收变更，建立长期维护基线。 |
@@ -220,10 +221,10 @@ forward_delay = GNSSAgent 的 recvfrom/recvmsg 返回时间 - UART 进程形成�
 | GST | 伪距 RMS 和位置误差椭圆七个原始统计字段 |
 | ZDA | UTC 日期和时间 |
 
-- `REQ-NMEA-006`：上述七类语句必须支持；其他标准语句和厂商私有语句在 v1 中不得改变状态。
+- `REQ-NMEA-006`：上述七类语句必须支持；其他标准语句和厂商私有语句在本版本中不得改变状态。
 - `REQ-NMEA-007`：目标设备没有输出某类语句时，对应字段必须保持无效，而不是填入推测值。
 
-目标差异必须通过有效位表达，不能改变固定状态布局。例如，当前 MultibandRadio 不输出 GST、ZDA、GL 或 GA 时，FULL 位 22–28、12、13 预期保持为 0；GST、ZDA、GL、GA 能力仍必须通过构造输入和其他实际输出这些语句的目标进行测试。MultibandHandheld 已观察到每秒 ZDA，部署版本必须包含 ZDA 支持，不得把合法 ZDA 计为 parser failure。
+目标差异必须通过有效位表达，不能改变固定状态布局。例如，目标尚未配置输出 GST、ZDA、GL 或 GA 时，FULL 位 22–29、12、13 按实际来源保持无效；GST、ZDA、GL、GA 能力仍必须通过构造输入和其他实际输出这些语句的目标进行测试。MultibandHandheld 已观察到每秒 ZDA，部署版本必须包含 ZDA 支持，不得把合法 ZDA 计为 parser failure。
 
 ## 8. UTC 周期聚合与数据模型
 
@@ -251,10 +252,10 @@ forward_delay = GNSSAgent 的 recvfrom/recvmsg 返回时间 - UART 进程形成�
 ### 8.2 有效性总则
 
 - `REQ-MODEL-001`：FULL 和 SIMPLE 必须拥有独立的 `field_validity_mask`；位为 1 表示字段来源存在、格式正确、满足语义条件且数值可表示。
-- `REQ-MODEL-002`：无效字段的载荷字节必须编码为 0；消费者不得通过数值是否为 0 判断有效性，因为 0 可以是合法值。
+- `REQ-MODEL-002`：带有效位的字段无效时载荷字节必须编码为 0；消费者不得通过数值是否为 0 判断有效性，因为 0 可以是合法值。
 - `REQ-MODEL-003`：`valid` 表示导航解是否可用，与字段能否解析是两个概念；时间字段有效性不依赖导航是否有效。
 - `REQ-MODEL-004`：输出不得包含 NaN 或 Infinity；超出协议类型范围的字段必须标记无效并编码为 0。
-- `REQ-MODEL-005`：FULL 和 SIMPLE 的字段、类型、掩码位、载荷长度与编码必须同时符合本文第 9 节和 TCP 状态协议 v1；两处内容必须在同一变更中保持一致。
+- `REQ-MODEL-005`：FULL 和 SIMPLE 的字段、类型、掩码位、载荷长度与编码必须同时符合本文第 9 节和 TCP 状态协议 v2；两处内容必须在同一变更中保持一致。
 
 ### 8.3 时间、位置与导航有效性
 
@@ -266,7 +267,7 @@ forward_delay = GNSSAgent 的 recvfrom/recvmsg 返回时间 - UART 进程形成�
 - `REQ-MODEL-011`：RMC 地速必须由节转换为米/秒；地面航向必须处于 `[0, 360)`；合法的 0 速度和 0 度航向必须保持有效。
 - `REQ-MODEL-012`：`solution_type` 来源于第一项可解析的 GGA quality 原值；quality 为 0 时该字段本身仍可以有效，但导航 `valid` 必须为 0。
 - `REQ-MODEL-013`：`differential_age` 来源于非负且可表示的 GGA 差分龄期；缺失、负值或越界值必须使该字段无效。
-- `REQ-MODEL-014`：SIMPLE 必须从同一周期 FULL 逻辑状态投影协议规定的九个字段，并使用独立的 0–8 位掩码；不得把 FULL 位号直接复制为 SIMPLE 位号。
+- `REQ-MODEL-014`：SIMPLE 必须从同一周期 FULL 逻辑状态投影九个带有效位的字段以及时间状态、原因、超时，并使用独立的 0–8 位掩码；不得把 FULL 位号直接复制为 SIMPLE 位号。
 
 `valid` 判定真值规则：
 
@@ -343,7 +344,19 @@ GSA System ID 使用以下精确映射：
 
 组间千分位差值 0 和 10 必须判定一致，差值 11 必须判定冲突。本周期没有完整有效 GSA DOP 时，`gsa_pdop`、`gsa_hdop`、`gsa_vdop` 全部无效，但不得影响独立有效的 `gga_hdop`。
 
-### 8.6 本机消费者授时
+### 8.6 GST RMS 时间可信度
+
+- `REQ-TIME-003`：根据 GST RMS 的低值稳定窗口计算经验时间可信度，状态为无法评估、确认中、推定可信、不可信；不得将其描述为准确概率或绝对授时精度。
+- `REQ-TIME-004`：默认连续 10 个有效 UTC 秒内 RMS 全部 ≤2 米、极差 ≤1 米才可信；可信后连续 3 个周期 RMS >5 米退出。门限及周期数必须可配置并校验。
+- `REQ-TIME-005`：用于判定的 GST 必须时间合法、属于本周期，并与本周期完整 UTC 在配置容差内对齐；多条有效 GST 采用最大 RMS。现有 FULL 原始 GST 字段的选择和有效位保持原语义。
+- `REQ-TIME-006`：缺少完整 UTC、导航无效、GST 不可用、RMC/ZDA 日期时间冲突或时间异常时不得可信；同周期完整 UTC 的最大值减最小值超过容差即判冲突，不得仅与首条来源比较。最近已发布周期的范围必须保留并合并后续同秒晚到来源；去重保护结束后的同秒重新聚合也不得丢失已知范围。不同 UTC 秒或输入重置时不继承旧周期范围。同秒重复不得重复计数或刷新新鲜度。
+
+明确导航无效信息不得被晚到/重复保护吞掉：被丢弃的定时 RMC/GLL 若状态为 V，或定时 GGA 的 quality=0，必须按保守策略撤销时间可信度并清空窗口；下一新周期携带 INVALID_NAVIGATION，之后重新确认。纯重复有效数据继续保持原去重行为。
+- `REQ-TIME-007`：默认 3 秒没有新的有效样本即撤销可信状态；UTC 增量与单调接收时间增量默认最多相差 500 毫秒，跨午夜正常递增必须支持。断流后重新积累窗口。排队状态必须保留内部单调到期时间，应用发布前和 TCP 发送锁内重新检查并降级过期结果；可信帧阻塞写的截止时间不得晚于其到期时间。该元数据不得改变协议布局。
+- `REQ-TIME-008`：TCP v2 将时间质量直接嵌入 SIMPLE/FULL，载荷分别为 64/136 字节；不发送独立 0x05 消息。没有新数据时不得发送任何状态、心跳或质量通知；输入过期/重置、逆序输入只在服务端本地清状态，下一新周期反映重新确认或不可信结果。
+- `REQ-TIME-009`：消费者只在同一帧的 time_state=2、UTC/接收时间有效且未过期时采用时间；FULL 还需 time_rms 有效。断连、收到非可信状态或距最后一条新状态接收达到 time_timeout_ms 时，必须用本地单调时钟撤销缓存可信状态；不能等待服务端通知。时间状态、原因、超时和 FULL 样本数始终有定义、不占有效位；完整原因码和配置见二进制协议第 17 节。
+
+### 8.7 本机消费者授时
 
 本机消费者收到完整状态帧时立即记录 `client_recv_time`，可以按下式估算收到帧时的目标 UTC：
 
@@ -369,10 +382,10 @@ target_at_client_receive = utc_time + (client_recv_time - recv_time)
 
 所有消息使用 8 字节公共帧头：
 
-| 帧偏移 | 长度 | 字段 | v1 要求 |
+| 帧偏移 | 长度 | 字段 | v2 要求 |
 |---:|---:|---|---|
 | 0 | 4 | `magic` | ASCII `GNSS`，十六进制 `47 4E 53 53` |
-| 4 | 1 | `version` | `0x01` |
+| 4 | 1 | `version` | `0x02` |
 | 5 | 1 | `message_type` | 见下表 |
 | 6 | 2 | `payload_length` | uint16，大端序，不含 8 字节帧头 |
 
@@ -382,11 +395,11 @@ target_at_client_receive = utc_time + (client_recv_time - recv_time)
 |---:|---|---|---:|---:|
 | `0x01` | `SUBSCRIBE_REQUEST` | 客户端 → 服务端 | 1 | 9 |
 | `0x02` | `SUBSCRIBE_ACK` | 服务端 → 客户端 | 1 | 9 |
-| `0x03` | `GNSS_STATUS_FULL` | 服务端 → 客户端 | 124 | 132 |
-| `0x04` | `GNSS_STATUS_SIMPLE` | 服务端 → 客户端 | 58 | 66 |
+| `0x03` | `GNSS_STATUS_FULL` | 服务端 → 客户端 | 136 | 144 |
+| `0x04` | `GNSS_STATUS_SIMPLE` | 服务端 → 客户端 | 64 | 72 |
 
 - `REQ-PROTO-001`：所有多字节整数和浮点位模式必须使用大端序；浮点必须使用 IEEE-754 binary32/binary64，并逐字段编码，不得发送编译器结构体内存布局。
-- `REQ-PROTO-002`：v1 帧不得增加 flags、sequence、reserved、CRC 或帧尾字段；单帧载荷不得超过 1024 字节。
+- `REQ-PROTO-002`：v2 帧不得增加 flags、sequence、reserved、CRC 或帧尾字段；单帧载荷不得超过 1024 字节。
 - `REQ-PROTO-003`：协议文档列出的 `0x10`、`0x11` 控制消息不属于 `GNSSAgent` 产品能力，处理规则只按 `REQ-TCP-007` 执行。
 
 ### 9.2 SIMPLE/FULL 订阅与 ACK
@@ -401,13 +414,13 @@ target_at_client_receive = utc_time + (client_recv_time - recv_time)
 订阅 SIMPLE 的完整请求帧：
 
 ```text
-47 4E 53 53 01 01 00 01 01
+47 4E 53 53 02 01 00 01 01
 ```
 
 订阅 FULL 的完整请求帧：
 
 ```text
-47 4E 53 53 01 01 00 01 02
+47 4E 53 53 02 01 00 01 02
 ```
 
 - `REQ-PROTO-004`：`status_type` 只能为 1 或 2；其他值必须返回 `INVALID_STATUS_TYPE`，不得建立订阅。
@@ -427,14 +440,14 @@ target_at_client_receive = utc_time + (client_recv_time - recv_time)
 成功 ACK 的完整帧：
 
 ```text
-47 4E 53 53 01 02 00 01 00
+47 4E 53 53 02 02 00 01 00
 ```
 
-- `REQ-PROTO-006`：能够可靠解析为订阅请求但帧头版本不是 1 时，服务端必须用 v1 `SUBSCRIBE_ACK` 返回 `UNSUPPORTED_VERSION`；无法按 v1 安全理解的高版本帧按未知版本跳过。
+- `REQ-PROTO-006`：能够可靠解析为订阅请求但帧头版本不是 2 时（含旧版 version=1），服务端必须用 v2 `SUBSCRIBE_ACK` 返回 `UNSUPPORTED_VERSION`，不得建立旧版订阅；无法按 v2 安全理解的其他版本帧按未知版本跳过。
 
 ### 9.3 SIMPLE 状态消息
 
-`GNSS_STATUS_SIMPLE (0x04)` 载荷固定为 58 字节，完整帧固定为 66 字节：
+`GNSS_STATUS_SIMPLE (0x04)` 载荷固定为 64 字节，完整帧固定为 72 字节：
 
 | 载荷偏移 | 长度 | 类型 | 有效位 | 字段 | 单位/含义 |
 |---:|---:|---|---:|---|---|
@@ -448,22 +461,25 @@ target_at_client_receive = utc_time + (client_recv_time - recv_time)
 | 52 | 4 | float32 | 6 | `course_over_ground_deg` | 地面航向，真北为 0°、顺时针，范围 `[0,360)` |
 | 56 | 1 | uint8 | 7 | `valid` | 0=导航解无效，1=导航解有效 |
 | 57 | 1 | uint8 | 8 | `used_satellites` | 参与定位的卫星总数 |
+| 58 | 1 | uint8 | — | `time_state` | 0 无法评估，1 确认中，2 推定可信，3 不可信 |
+| 59 | 1 | uint8 | — | `time_reason` | 时间判定原因，见 TCP 协议第 17 节 |
+| 60 | 4 | uint32 | — | `time_timeout_ms` | 客户端数据新鲜度门限，默认 3000 毫秒 |
 
 SIMPLE 固定帧头：
 
 ```text
-47 4E 53 53 01 04 00 3A
+47 4E 53 53 02 04 00 40
 ```
 
 - `REQ-PROTO-007`：SIMPLE 有效位必须使用本表的独立 0–8 位定义，不得按 FULL 位号解释。
 
 ### 9.4 FULL 状态消息
 
-`GNSS_STATUS_FULL (0x03)` 载荷固定为 124 字节，完整帧固定为 132 字节：
+`GNSS_STATUS_FULL (0x03)` 载荷固定为 136 字节，完整帧固定为 144 字节：
 
 | 载荷偏移 | 长度 | 类型 | 有效位 | 字段 | 单位/含义 |
 |---:|---:|---|---:|---|---|
-| 0 | 8 | uint64 | — | `field_validity_mask` | 位 0–28 见本表，位 29–63 必须为 0 |
+| 0 | 8 | uint64 | — | `field_validity_mask` | 位 0–29 见本表，位 30–63 必须为 0 |
 | 8 | 8 | uint64 | 0 | `utc_time` | GNSS UTC，Unix epoch 毫秒 |
 | 16 | 8 | uint64 | 1 | `recv_time` | 服务端接收本周期首条有效输入的本机 Unix 毫秒时间 |
 | 24 | 8 | float64 | 2 | `latitude` | 纬度，度，范围 -90～90，北为正 |
@@ -493,6 +509,11 @@ SIMPLE 固定帧头：
 | 112 | 4 | float32 | 26 | `gst_latitude_error` | 纬度方向 1σ 误差，米，非负 |
 | 116 | 4 | float32 | 27 | `gst_longitude_error` | 经度方向 1σ 误差，米，非负 |
 | 120 | 4 | float32 | 28 | `gst_altitude_error` | 高度方向 1σ 误差，米，非负 |
+| 124 | 1 | uint8 | — | `time_state` | 0 无法评估，1 确认中，2 推定可信，3 不可信 |
+| 125 | 1 | uint8 | — | `time_reason` | 时间判定原因，见 TCP 协议第 17 节 |
+| 126 | 2 | uint16 | — | `time_samples` | 当前累计窗口样本数；可信时保留确认窗口数 |
+| 128 | 4 | uint32 | — | `time_timeout_ms` | 客户端数据新鲜度门限，默认 3000 毫秒 |
+| 132 | 4 | float32 | 29 | `time_rms` | 当前周期用于判定的最大有效对齐 GST RMS，米 |
 
 `solution_type` 取值：
 
@@ -512,10 +533,10 @@ SIMPLE 固定帧头：
 FULL 固定帧头：
 
 ```text
-47 4E 53 53 01 03 00 7C
+47 4E 53 53 02 03 00 88
 ```
 
-- `REQ-PROTO-008`：`solution_type` 的 0–8 必须按 TCP 状态协议 v1 枚举解释；9–255 必须保留为厂商扩展或未知值，消费者不得擅自映射。
+- `REQ-PROTO-008`：`solution_type` 的 0–8 必须按 TCP 状态协议 v2 枚举解释；9–255 必须保留为厂商扩展或未知值，消费者不得擅自映射。
 
 ### 9.5 会话与发布规则
 
@@ -527,12 +548,12 @@ FULL 固定帧头：
 - `REQ-TCP-006`：未知消息类型或不受支持版本在长度合理时必须跳过整帧，不得破坏随后合法帧。
 - `REQ-TCP-007`：收到 `GNSS_SWITCH_REQ` (`0x10`) 时必须静默跳过整帧，保持连接可用，不发送 `GNSS_SWITCH_ACK`、通用错误或其他响应，也不得触发 UART、GPIO 或控制行为。
 - `REQ-TCP-008`：每个订阅者只保留一个尚未发送的最新状态；新状态可以替换队列中的旧状态。单次写入超过 3 秒必须只关闭该客户端。
-- `REQ-TCP-009`：状态发布频率最高约 1 Hz；无成功解析的 NMEA 时不得发送状态帧或应用心跳。
-- `REQ-TCP-010`：帧头、消息类型、固定载荷长度、字段偏移、有效位、大端序、IEEE-754 表示和 golden frames 必须与 TCP 状态协议 v1 逐字节一致。
+- `REQ-TCP-009`：状态发布频率最高约 1 Hz；没有新周期时不得发送状态、应用心跳或质量通知。时间质量随正常周期状态同帧发布，不另设消息。
+- `REQ-TCP-010`：帧头、消息类型、固定载荷长度、字段偏移、有效位、大端序、IEEE-754 表示和 golden frames 必须与 TCP 状态协议 v2 逐字节一致。
 - `REQ-TCP-011`：可可靠解析但 `status_type` 非法或版本不支持的订阅必须返回对应 ACK，并允许客户端在原 5 秒期限内重新发送合法订阅；已知类型但载荷长度错误的帧整帧丢弃，不发送通用错误。
-- `REQ-TCP-012`：v1 不提供退订消息；客户端关闭 TCP 连接即结束订阅，重连后必须重新订阅。
-- `REQ-TCP-013`：发送端必须清除 SIMPLE 位 9–63 和 FULL 位 29–63；消费者收到未来版本中自己不认识的有效位时必须忽略未知位，不得崩溃或改变已知字段语义。
-- `REQ-TCP-014`：无应用层心跳。消费者必须根据 `recv_time`、业务超时和连接状态自行判断数据是否陈旧，不能把 TCP 连接仍存在或曾收到订阅 ACK 当作 GNSS 数据仍然新鲜。
+- `REQ-TCP-012`：v2 不提供退订消息；客户端关闭 TCP 连接即结束订阅，重连后必须重新订阅。
+- `REQ-TCP-013`：发送端必须清除 SIMPLE 位 9–63 和 FULL 位 30–63；消费者收到未来版本中自己不认识的有效位时必须忽略未知位，不得崩溃或改变已知字段语义。
+- `REQ-TCP-014`：无应用层心跳或失效通知。消费者必须从最后一条新状态接收时起按本地单调时钟计时，达到 time_timeout_ms 或断连时停止采用缓存时间；不能把 TCP 连接仍存在或曾收到订阅 ACK 当作 GNSS 数据仍然新鲜。
 
 ### 9.6 TCP 流解析算法
 
@@ -549,7 +570,7 @@ FULL 固定帧头：
 
 ### 9.7 消费者解码顺序
 
-消费者每收到一帧状态必须依次：校验 magic、version、message type 和精确载荷长度；按大端序读取 mask；只解读有效位置 1 的字段；按所订阅格式使用 SIMPLE 或 FULL 位号；需要导航位置时再检查 `valid` 位和值；需要 GNSS 时间时检查 `utc_time`；需要新鲜度时结合 `recv_time` 和本机接收时间。任何一步失败时不得使用该帧的业务值。
+消费者每收到一帧状态必须依次：校验 magic、version、message type 和精确载荷长度；按大端序读取 mask；带有效位的字段只在位为 1 时解读，时间状态/原因/超时/FULL样本数始终解读；按所订阅格式使用 SIMPLE 或 FULL 位号；需要导航位置时再检查 `valid` 位和值；采用 GNSS 时间时检查 `utc_time`、`recv_time` 有效位、time_state=2 与接收新鲜度；FULL 同时检查 bit29；使用本地单调接收间隔执行 time_timeout_ms。任何一步失败时不得使用该帧的业务值。
 
 ## 10. 异常恢复、并发与性能
 
@@ -606,7 +627,7 @@ FULL 固定帧头：
 - UDP 输入为一个数据报一条原始 NMEA，不使用应用层包头或长度字段；UDP 与 TCP 默认都使用 29501，传输协议不同，不冲突。
 - UDP v1 没有线内版本字段。未来增加时间戳、序号或包头时必须更换 UDP 端口；`29501/UDP` 永久保留为原始 NMEA 格式。
 - 当前 MultibandRadio 组合模式每周期可能输出多条不带 System ID 的 `GNGSA`，不能按语句顺序猜测星座。
-- 当前 MultibandRadio 预期不输出 GST、ZDA、GL、GA；MultibandHandheld 已观察到 ZDA。设备差异通过有效位表达，不改变协议布局。
+- 早期 MultibandRadio 采集未观察到 GST、ZDA、GL、GA；MultibandHandheld 已观察到 ZDA。设备侧将配置开启 GST，字段以实际输入为准；未收到 GST 时不得推定可信，设备差异通过有效位表达。
 - 当前接收机在无定位时可能输出 `127.000` DOP、空 RMC 日期和不可信的 `geoid_separation=0`，这些值必须按第 8 节规则处理。
 - `GNSSAgent` 不提供 GNSS 开关、模式切换、串口命令、GPIO 或系统校时能力；二进制协议文档中的控制消息不是本产品功能。
 
@@ -656,6 +677,7 @@ FULL 固定帧头：
 - GGA HDOP 与 GSA 三项 DOP 必须独立；覆盖 fix type 1、quality 0、`127.000` 和只有一组有效 DOP。
 - 多组 GSA DOP 固定差值 0、10、11，以及 `0.4895→490`、`0.5005→501`、`0.9995→1000`，证明比较未经过二进制浮点。
 - GST 七项分别覆盖有效、缺失、负值、非有限值和方向 360；单项错误不得清除其他 GST 项。
+- 时间质量覆盖连续窗口/滞回、RMC/ZDA 小数时间冲突、逆序完整 UTC、GST 对齐/缺失、重复、跨日、断流与恢复；没有新数据时只清内部状态，禁止额外状态或质量推送。
 - MSL 高度与椭球高覆盖有效定位、无定位、负海拔、`geoid_separation=0`、缺失分离量和非有限结果。
 - 聚合与编码不得持有调用者可变切片；后续输入或编码不得回写已保存语句和源状态。
 
@@ -664,6 +686,7 @@ FULL 固定帧头：
 - 固定 SUBSCRIBE、ACK、SIMPLE、FULL 的消息类型、载荷长度、总帧长度、全部字段偏移、有效位、大端序和 golden bytes。
 - SIMPLE `status_type=1`、FULL `status_type=2`、ACK 结果 0–5 和未知原始枚举值必须逐项固定。
 - 无效字段必须清零；合法 0 必须保留有效位；SIMPLE/FULL 掩码独立，保留位发送时清零。
+- v2 时间质量字段必须验证固定偏移、始终有定义的时间质量字段、FULL bit29、旧版订阅拒绝，以及 SIMPLE/FULL 每周期各只有一帧。
 - 编码器必须拒绝或清除越界纬度/经度、`valid>1`、`fix_dimension` 非 1–3、负 DOP/CN0/误差、航向或 GST 方向达到 360，以及 NaN/Infinity。
 - 覆盖 TCP 半帧、粘包、每个 magic 拆分位置、垃圾前缀、伪 magic、超大长度、已知类型错误长度、未知类型和不支持版本。
 - 格式错误后必须恢复下一合法帧；连续大块垃圾和对抗性 magic 前缀的内存使用必须有界。
@@ -711,7 +734,7 @@ FULL 固定帧头：
 6. UDP 正式窗口至少连续采集 10 分钟，验证长度 1–1024、单 `$`、单语句、无 NUL、终止符、checksum、talker、类型、源地址/端口和内核 drops；所有协议错误计数为 0。
 7. 核对 GNSSAgent 60 秒摘要：`udp_rejects=0`、`checksum_failures=0`、批准语句的 `parser_failures=0`、`kernel_drops=0`、完整窗口内 `gsv_incomplete=0`。
 8. 分别验证 GPS、北斗和组合模式的实际 talker、GSA/GSV 组、星座计数、used satellites、DOP、C/N0 和 SIMPLE/FULL 字段；不得依据固定句频代替内容检查。
-9. 分别订阅 SIMPLE 和 FULL，验证成功 ACK、66/132 字节总帧、约 1 Hz、有效位、字段范围和格式隔离；未知保留位不得影响已知字段。
+9. 分别订阅 SIMPLE 和 FULL，验证成功 ACK、72/144 字节总帧、约 1 Hz、有效位、字段范围和格式隔离；未知保留位不得影响已知字段。
 10. 验证有定位、无定位、遮挡与恢复。无定位时仍有合法 NMEA 则收到 `valid=0`；无日期时 `utc_time` 无效，收到完整 RMC 或 ZDA 日期时间后恢复有效。
 11. 停止或关闭 GNSS 后不得发布伪造状态；重新收到 UDP NMEA 后自然恢复。UART 进程和 `GNSSAgent` 必须分别以前后两种顺序启动并验证恢复。
 12. 重启 `GNSSAgent` 不得造成 GNSS 复位、模式变化、UART 进程异常或原有业务中断；`GNSSAgent` 不发送控制命令、不操作 GPIO、不修改系统时间。

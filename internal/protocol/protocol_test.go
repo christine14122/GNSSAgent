@@ -14,11 +14,11 @@ import (
 
 const (
 	allSimpleBits = uint64(1<<9) - 1
-	allFullBits   = uint64(1<<29) - 1
+	allFullBits   = uint64(1<<30) - 1
 )
 
 func TestProtocolConstants(t *testing.T) {
-	if Magic != "GNSS" || Version != 1 || HeaderSize != 8 || MaxPayload != 1024 {
+	if Magic != "GNSS" || Version != 2 || HeaderSize != 8 || MaxPayload != 1024 {
 		t.Fatalf("unexpected frame constants: magic=%q version=%d header=%d max=%d", Magic, Version, HeaderSize, MaxPayload)
 	}
 	wantTypes := []uint8{0x01, 0x02, 0x03, 0x04, 0x10, 0x11}
@@ -74,11 +74,11 @@ func TestProtocolEnumValues(t *testing.T) {
 }
 
 func TestFixedFrameSizes(t *testing.T) {
-	if got := len(EncodeSimple(model.SimpleStatus{})); got != 66 {
-		t.Fatalf("simple frame=%d want=66", got)
+	if got := len(EncodeSimple(model.SimpleStatus{})); got != 72 {
+		t.Fatalf("simple frame=%d want=72", got)
 	}
-	if got := len(EncodeFull(model.FullStatus{})); got != 132 {
-		t.Fatalf("full frame=%d want=132", got)
+	if got := len(EncodeFull(model.FullStatus{})); got != 144 {
+		t.Fatalf("full frame=%d want=144", got)
 	}
 }
 
@@ -88,9 +88,9 @@ func TestMessageGoldenFrames(t *testing.T) {
 		got  []byte
 		want string
 	}{
-		{name: "simple subscribe", got: EncodeSubscribeRequest(StatusSimple), want: "474e53530101000101"},
-		{name: "full subscribe", got: EncodeSubscribeRequest(StatusFull), want: "474e53530101000102"},
-		{name: "subscribe success", got: EncodeSubscribeACK(SubscribeSuccess), want: "474e53530102000100"},
+		{name: "simple subscribe", got: EncodeSubscribeRequest(StatusSimple), want: "474e53530201000101"},
+		{name: "full subscribe", got: EncodeSubscribeRequest(StatusFull), want: "474e53530201000102"},
+		{name: "subscribe success", got: EncodeSubscribeACK(SubscribeSuccess), want: "474e53530202000100"},
 		{
 			name: "switch request",
 			got: EncodeSwitchRequest(SwitchRequest{
@@ -98,12 +98,12 @@ func TestMessageGoldenFrames(t *testing.T) {
 				Enabled:   1,
 				Type:      TypeGPSBeiDou,
 			}),
-			want: "474e535301100006010203040103",
+			want: "474e535302100006010203040103",
 		},
 		{
 			name: "switch ack",
 			got:  EncodeSwitchACK(SwitchACK{RequestID: 0x01020304, Result: SwitchSuccess}),
-			want: "474e5353011100050102030400",
+			want: "474e5353021100050102030400",
 		},
 	}
 	for _, tt := range tests {
@@ -217,7 +217,7 @@ func TestSimpleAllFieldOffsetsAndMaskBits(t *testing.T) {
 		UsedSatellites:      9,
 	}
 	frame := EncodeSimple(status)
-	if !bytes.Equal(frame[:8], mustHex(t, "474e53530104003a")) {
+	if !bytes.Equal(frame[:8], mustHex(t, "474e535302040040")) {
 		t.Fatalf("header=%x", frame[:8])
 	}
 	payload := frame[8:]
@@ -232,14 +232,14 @@ func TestSimpleAllFieldOffsetsAndMaskBits(t *testing.T) {
 	if payload[56] != 1 || payload[57] != 9 {
 		t.Fatalf("tail=%x want=0109", payload[56:58])
 	}
-	assertLayoutEnd(t, []int{8, 8, 8, 8, 8, 8, 4, 4, 1, 1}, 58)
+	assertLayoutEnd(t, []int{8, 8, 8, 8, 8, 8, 4, 4, 1, 1, 1, 1, 4}, 64)
 }
 
 func TestFullAllFieldOffsetsAndMaskBits(t *testing.T) {
 	assertFullMaskBits(t)
 	status := validFullStatus()
 	frame := EncodeFull(status)
-	if !bytes.Equal(frame[:8], mustHex(t, "474e53530103007c")) {
+	if !bytes.Equal(frame[:8], mustHex(t, "474e535302030088")) {
 		t.Fatalf("header=%x", frame[:8])
 	}
 	payload := frame[8:]
@@ -264,7 +264,8 @@ func TestFullAllFieldOffsetsAndMaskBits(t *testing.T) {
 		8, 8, 8, 8, 8, 8, 8,
 		1, 1, 1, 1, 1, 1, 1, 1,
 		4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
-	}, 124)
+		1, 1, 2, 4, 4,
+	}, 136)
 }
 
 func TestStatusValidZeroFieldsKeepTheirBits(t *testing.T) {
@@ -338,6 +339,7 @@ func TestStatusBitsOffForceNonzeroValuesToZero(t *testing.T) {
 
 	fullStatus := validFullStatus()
 	fullStatus.FieldValidityMask = 0
+	fullStatus.TimeQuality = model.TimeQuality{}
 	if payload := EncodeFull(fullStatus)[8:]; !allZero(payload) {
 		t.Fatalf("full invalid fields leaked: %x", payload)
 	}
@@ -593,15 +595,15 @@ func TestDecoderDiscardsWholeKnownWrongLengthFrameContainingMagic(t *testing.T) 
 	}
 }
 
-func TestDecoderDropsKnownVersionOneFramesWithWrongLengths(t *testing.T) {
+func TestDecoderDropsKnownVersionTwoFramesWithWrongLengths(t *testing.T) {
 	wants := []struct {
 		messageType uint8
 		length      int
 	}{
 		{TypeSubscribeRequest, 1},
 		{TypeSubscribeACK, 1},
-		{TypeStatusFull, 124},
-		{TypeStatusSimple, 58},
+		{TypeStatusFull, 136},
+		{TypeStatusSimple, 64},
 		{TypeSwitchRequest, 6},
 		{TypeSwitchACK, 5},
 	}
@@ -621,7 +623,7 @@ func TestDecoderDropsKnownVersionOneFramesWithWrongLengths(t *testing.T) {
 func TestDecoderRetainsUnknownTypeAndUnsupportedVersion(t *testing.T) {
 	d := NewDecoder(MaxPayload)
 	unknown := rawFrame(Version, 0x99, []byte{1, 2})
-	unsupported := rawFrame(2, TypeSubscribeRequest, []byte{3, 4, 5})
+	unsupported := rawFrame(1, TypeSubscribeRequest, []byte{3, 4, 5})
 	frames := d.Feed(append(unknown, unsupported...))
 	if len(frames) != 2 {
 		t.Fatalf("frames=%+v", frames)
@@ -629,7 +631,7 @@ func TestDecoderRetainsUnknownTypeAndUnsupportedVersion(t *testing.T) {
 	if frames[0].Version != Version || frames[0].Type != 0x99 || !bytes.Equal(frames[0].Payload, []byte{1, 2}) {
 		t.Fatalf("unknown=%+v", frames[0])
 	}
-	if frames[1].Version != 2 || frames[1].Type != TypeSubscribeRequest || !bytes.Equal(frames[1].Payload, []byte{3, 4, 5}) {
+	if frames[1].Version != 1 || frames[1].Type != TypeSubscribeRequest || !bytes.Equal(frames[1].Payload, []byte{3, 4, 5}) {
 		t.Fatalf("unsupported=%+v", frames[1])
 	}
 }
@@ -774,6 +776,7 @@ func validFullStatus() model.FullStatus {
 		GSTLatitudeError:    13.25,
 		GSTLongitudeError:   14.5,
 		GSTAltitudeError:    15.75,
+		TimeQuality:         model.TimeQuality{Evaluated: true, RMSValid: true, RMS: 1.5},
 	}
 }
 
@@ -829,6 +832,7 @@ func assertFullMaskBits(t *testing.T) {
 		model.FullGSTLatitudeErrorValid,
 		model.FullGSTLongitudeErrorValid,
 		model.FullGSTAltitudeErrorValid,
+		model.FullTimeRMSValid,
 	}
 	for i, bit := range got {
 		if want := uint64(1) << i; bit != want {

@@ -3,7 +3,11 @@ package config
 import (
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
+	"time"
+
+	"gnssagent/internal/timequality"
 )
 
 func requireError(t *testing.T, err error, want string) {
@@ -25,6 +29,7 @@ func TestParseDefaultsAreTargetIndependent(t *testing.T) {
 		LogLevel:             "info",
 		LogFile:              "",
 		LogMaxBytes:          8 * 1024 * 1024,
+		TimeQuality:          timequality.DefaultConfig(),
 	}
 
 	for _, target := range []string{
@@ -108,6 +113,7 @@ func TestParseFlagOverrides(t *testing.T) {
 		LogLevel:             "debug",
 		LogFile:              "/tmp/gnssagent.log",
 		LogMaxBytes:          4096,
+		TimeQuality:          timequality.DefaultConfig(),
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("Parse() = %#v, want %#v", got, want)
@@ -164,5 +170,55 @@ func TestParseAcceptsBoundaryConnectionLimits(t *testing.T) {
 		if _, err := Parse(args, "unknown-target"); err != nil {
 			t.Fatalf("Parse(%v) error = %v", args, err)
 		}
+	}
+}
+
+func TestParseTimeQualityFlagOverrides(t *testing.T) {
+	got, err := Parse([]string{
+		"--time-rms-enter", "1.5",
+		"--time-rms-exit", "4",
+		"--time-rms-spread", "0.5",
+		"--time-confirm-cycles", "12",
+		"--time-exit-cycles", "4",
+		"--time-gst-timeout", "4s",
+		"--time-step-tolerance", "250ms",
+	}, "multiband-radio")
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	want := timequality.Config{
+		EnterRMS:         1.5,
+		ExitRMS:          4,
+		StableRange:      0.5,
+		Window:           12,
+		ExitSamples:      4,
+		Timeout:          4 * time.Second,
+		MaxTimeStepError: 250 * time.Millisecond,
+	}
+	if got.TimeQuality != want {
+		t.Fatalf("TimeQuality = %#v, want %#v", got.TimeQuality, want)
+	}
+}
+
+func TestParseRejectsInvalidTimeQuality(t *testing.T) {
+	for _, args := range [][]string{
+		{"--time-rms-enter", "NaN"},
+		{"--time-rms-exit", "+Inf"},
+		{"--time-rms-spread", "-Inf"},
+		{"--time-rms-enter", "-1"},
+		{"--time-rms-spread", "-1"},
+		{"--time-rms-exit", "2"},
+		{"--time-rms-exit", "1"},
+		{"--time-confirm-cycles", "0"},
+		{"--time-exit-cycles", "0"},
+		{"--time-gst-timeout", "0s"},
+		{"--time-step-tolerance", "-1ms"},
+	} {
+		t.Run(strings.Join(args, "="), func(t *testing.T) {
+			_, err := Parse(args, "ccu")
+			if err == nil || !strings.HasPrefix(err.Error(), "time quality: ") {
+				t.Fatalf("Parse(%v) error = %v, want time quality validation error", args, err)
+			}
+		})
 	}
 }

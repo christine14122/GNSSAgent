@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"gnssagent/internal/model"
 	"gnssagent/internal/protocol"
 )
 
@@ -26,9 +27,10 @@ type session struct {
 	subscriber *subscriber
 	observer   Observer
 
-	writeMu   sync.Mutex
-	closeOnce sync.Once
-	done      chan struct{}
+	writeMu     sync.Mutex
+	writeFailed bool
+	closeOnce   sync.Once
+	done        chan struct{}
 }
 
 func newSession(conn net.Conn, hub *Hub, subscribeTimeout, writeTimeout time.Duration) *session {
@@ -114,8 +116,8 @@ func (s *session) writeACK(result protocol.SubscribeResult) bool {
 func (s *session) writeStatuses(subscriber *subscriber) {
 	for {
 		select {
-		case frame := <-subscriber.queue:
-			if err := s.writeFrame(frame); err != nil {
+		case status := <-subscriber.queue:
+			if err := s.writeStatus(status, subscriber.statusType); err != nil {
 				s.close()
 				return
 			}
@@ -128,7 +130,42 @@ func (s *session) writeStatuses(subscriber *subscriber) {
 func (s *session) writeFrame(frame []byte) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	if err := s.conn.SetWriteDeadline(time.Now().Add(s.writeTimeout)); err != nil {
+	return s.writeFrameLocked(frame, time.Now().Add(s.writeTimeout))
+}
+
+func (s *session) writeStatus(status model.FullStatus, statusType protocol.StatusType) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	now := time.Now()
+	status.TimeQuality.Expire(now)
+	deadline := now.Add(s.writeTimeout)
+	quality := status.TimeQuality
+	if quality.Evaluated && quality.State == 2 && !quality.ExpiresAt.IsZero() && quality.ExpiresAt.Before(deadline) {
+		deadline = quality.ExpiresAt
+	}
+	var frame []byte
+	if statusType == protocol.StatusSimple {
+		frame = protocol.EncodeSimple(status.Simple())
+	} else {
+		frame = protocol.EncodeFull(status)
+	}
+	return s.writeFrameLocked(frame, deadline)
+}
+
+// writeFrameLocked requires writeMu so an ACK cannot split a status frame.
+func (s *session) writeFrameLocked(frame []byte, deadline time.Time) (err error) {
+	if s.writeFailed {
+		return net.ErrClosed
+	}
+	defer func() {
+		if err != nil {
+			// A partial frame must never be continued by another status or ACK,
+			// even when session cleanup is waiting for the hub lock.
+			s.writeFailed = true
+			_ = s.conn.Close()
+		}
+	}()
+	if err := s.conn.SetWriteDeadline(deadline); err != nil {
 		return err
 	}
 	for len(frame) > 0 {

@@ -67,13 +67,20 @@ func run(args []string) error {
 		"system_utc", now.UTC().Format(time.RFC3339Nano),
 		"log_destination", logDestination,
 		"log_max_bytes", cfg.LogMaxBytes,
+		"time_rms_enter", cfg.TimeQuality.EnterRMS,
+		"time_rms_exit", cfg.TimeQuality.ExitRMS,
+		"time_rms_spread", cfg.TimeQuality.StableRange,
+		"time_confirm_cycles", cfg.TimeQuality.Window,
+		"time_exit_cycles", cfg.TimeQuality.ExitSamples,
+		"time_gst_timeout", cfg.TimeQuality.Timeout,
+		"time_step_tolerance", cfg.TimeQuality.MaxTimeStepError,
 		"log_backups", 1)
 
 	stats := observe.NewStats()
 	statusServer := server.New(cfg.TCPListenAddress, cfg.MaxConnections, cfg.MaxRemoteConnections)
 	statusServer.SetObserver(stats)
 	udpManager := udpinput.NewManager(cfg.UDPListenAddress)
-	service := app.New(udpManager, statusServer, stats, logger)
+	service := app.New(udpManager, statusServer, stats, logger, cfg.TimeQuality)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

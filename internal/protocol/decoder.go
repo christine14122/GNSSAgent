@@ -76,7 +76,7 @@ func (d *Decoder) drain(frames []Frame) []Frame {
 
 		version := d.buf[4]
 		messageType := d.buf[5]
-		if version != Version || validVersionOneLength(messageType, payloadLength) {
+		if version != Version || validVersionTwoLength(messageType, payloadLength) {
 			payload := make([]byte, payloadLength)
 			copy(payload, d.buf[HeaderSize:frameLength])
 			frames = append(frames, Frame{
@@ -89,12 +89,12 @@ func (d *Decoder) drain(frames []Frame) []Frame {
 	}
 }
 
-func validVersionOneLength(messageType uint8, payloadLength int) bool {
-	expected, known := versionOnePayloadLength(messageType)
+func validVersionTwoLength(messageType uint8, payloadLength int) bool {
+	expected, known := versionTwoPayloadLength(messageType)
 	return !known || payloadLength == expected
 }
 
-func versionOnePayloadLength(messageType uint8) (int, bool) {
+func versionTwoPayloadLength(messageType uint8) (int, bool) {
 	switch messageType {
 	case TypeSubscribeRequest:
 		return 1, true

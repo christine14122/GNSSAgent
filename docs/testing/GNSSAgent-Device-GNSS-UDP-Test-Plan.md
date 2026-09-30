@@ -1,6 +1,6 @@
 # 设备侧 GNSS UDP 消息测试方案
 
-- 文档版本：1.0
+- 文档版本：1.1（TCP v2，2026-09-30）
 - 日期：2026-08-19
 - 适用目标：CCU、HF、MultibandRadio、MultibandHandheld
 - 被测链路：GNSS UART → 设备 UART 唯一读写进程 → UDP/29501 → GNSSAgent → TCP 状态协议
@@ -19,7 +19,7 @@
 协议依据：
 
 - `docs/protocol/GNSSAgent-UDP-NMEA-Protocol-v1.md`
-- `docs/protocol/GNSSAgent-Binary-Protocol-v1.md`
+- `docs/protocol/GNSSAgent-Binary-Protocol-v2.md`
 
 ## 2. 测试角色与边界
 
@@ -66,7 +66,7 @@
 - checksum 缺失、格式错误和校验失败数量全部为 0。
 - tcpdump、GNSSAgent socket 和 UART 的内核丢包/错误增量全部为 0。
 - 捕获期间 UART 进程和 GNSSAgent 不得重启。
-- SIMPLE/FULL 订阅 ACK 成功，帧长和字段布局符合 v1 协议。
+- SIMPLE/FULL 订阅 ACK 成功，帧长和字段布局符合 TCP v2 协议；UDP NMEA 输入仍为 v1。
 - 有效位为 1 的字段必须格式正确、范围正确；有效位为 0 的字段载荷必须为 0。
 - 长稳测试期间不得持续产生 UDP reject、checksum failure 或 parser failure。
 
@@ -222,20 +222,24 @@ published_cycles > 0
 分别发送 SIMPLE 和 FULL 订阅请求：
 
 ```text
-SIMPLE: 47 4E 53 53 01 01 00 01 01
-FULL:   47 4E 53 53 01 01 00 01 02
+SIMPLE: 47 4E 53 53 02 01 00 01 01
+FULL:   47 4E 53 53 02 01 00 01 02
 ```
 
 检查：
 
-- ACK 为 `47 4E 53 53 01 02 00 01 00`。
-- SIMPLE 帧固定 66 字节，类型 `0x04`，payload 58 字节。
-- FULL 帧固定 132 字节，类型 `0x03`，payload 124 字节。
+- ACK 为 `47 4E 53 53 02 02 00 01 00`；v1 订阅必须收到不支持版本的结果。
+- SIMPLE 帧固定 72 字节，类型 `0x04`，payload 64 字节。
+- FULL 帧固定 144 字节，类型 `0x03`，payload 136 字节。
 - 发布频率不超过 1 Hz。
 - `recv_time` 单调递增。
 - 经纬度、海拔、速度、航向、卫星数、DOP 和有效位符合原始 NMEA。
 - RMC/ZDA 正常时 UTC 应有效；RMC 正常时速度/航向应按字段情况有效。
 - GSV 完整时对应星座卫星数字段应有效。
+- 每周期只发送所订阅的一条状态帧，不再发送独立时间质量消息。
+- SIMPLE 载荷偏移 58/59/60 分别检查 time_state、time_reason、time_timeout_ms；FULL 偏移 124/125/126/128/132 分别检查 time_state、time_reason、time_samples、time_timeout_ms、time_rms。
+- 开启 GST 后，按配置构造或实测连续低 RMS、稳定窗口、连续超限、GST 缺失、UTC 冲突/倒退及恢复；确认两种输出中的时间状态一致。FULL 的 time_rms 用有效位 bit29 表达，0 值不能视作缺失。
+- 断流后不得收到伪造的新状态；客户端断连或自上一条新状态起达到 time_timeout_ms 必须撤销缓存可信状态，恢复后须重新累计窗口。
 
 通过条件：协议、频率、有效位和值全部一致。
 

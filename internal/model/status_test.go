@@ -62,6 +62,7 @@ func TestFullValidityBitsMatchWireContract(t *testing.T) {
 		FullGSTLatitudeErrorValid,
 		FullGSTLongitudeErrorValid,
 		FullGSTAltitudeErrorValid,
+		FullTimeRMSValid,
 	}
 	for i, bit := range bits {
 		want := uint64(1) << i
@@ -143,5 +144,12 @@ func TestSimpleProjectionDoesNotCopyInvalidValues(t *testing.T) {
 	}
 	if simple := full.Simple(); simple != (SimpleStatus{}) {
 		t.Fatalf("unexpected invalid values in projection: %+v", simple)
+	}
+}
+
+func TestSimpleProjectionPreservesTimeQuality(t *testing.T) {
+	full := FullStatus{TimeQuality: TimeQuality{Evaluated: true, State: 2, Reason: 2, Samples: 10, RMSValid: true, RMS: 1.5, TimeoutMillis: 3000}}
+	if simple := full.Simple(); simple.TimeQuality != full.TimeQuality {
+		t.Fatalf("quality projection=%+v want=%+v", simple.TimeQuality, full.TimeQuality)
 	}
 }

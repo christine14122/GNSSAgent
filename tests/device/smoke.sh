@@ -82,7 +82,7 @@ cleanup() {
 trap cleanup EXIT HUP INT TERM
 
 (
-    printf '\107\116\123\123\001\001\000\001\001'
+    printf '\107\116\123\123\002\001\000\001\001'
     sleep 4
 ) | nc -w 5 127.0.0.1 "$tcp_port" >"$response_file" &
 subscriber_pid=$!
@@ -91,22 +91,22 @@ send_fixture
 wait "$subscriber_pid" || true
 
 response_size=$(wc -c <"$response_file" | tr -d ' ')
-if [ "$response_size" -lt 75 ]; then
-    echo "subscription response is only $response_size bytes; expected ACK plus a 66-byte SIMPLE frame" >&2
+if [ "$response_size" -lt 81 ]; then
+    echo "subscription response is only $response_size bytes; expected ACK plus a 72-byte SIMPLE frame" >&2
     exit 1
 fi
-dd if="$response_file" of="$status_file" bs=1 skip=9 count=66 2>/dev/null
+dd if="$response_file" of="$status_file" bs=1 skip=9 count=72 2>/dev/null
 status_size=$(wc -c <"$status_file" | tr -d ' ')
-if [ "$status_size" -ne 66 ]; then
-    echo "SIMPLE frame size is $status_size, expected 66" >&2
+if [ "$status_size" -ne 72 ]; then
+    echo "SIMPLE frame size is $status_size, expected 72" >&2
     exit 1
 fi
 status_header=$(od -An -tx1 -N8 "$status_file" | tr -d ' \n')
-if [ "$status_header" != "474e53530104003a" ]; then
+if [ "$status_header" != "474e535302040040" ]; then
     echo "unexpected SIMPLE frame header: $status_header" >&2
     exit 1
 fi
-echo "SIMPLE subscription returned a valid 66-byte frame"
+echo "SIMPLE subscription returned a valid 72-byte frame"
 
 if [ ! -f "$LOG_FILE" ]; then
     echo "persistent service log is missing: $LOG_FILE" >&2

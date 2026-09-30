@@ -1,7 +1,6 @@
 package server
 
 import (
-	"bytes"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -29,8 +28,8 @@ func TestSessionFirstSubscriptionWins(t *testing.T) {
 
 	hub.Publish(model.FullStatus{FieldValidityMask: model.FullValidValid, Valid: 1})
 	frame := readFrame(t, client, time.Second)
-	if frame.Type != protocol.TypeStatusSimple || len(frame.Payload) != 58 {
-		t.Fatalf("status frame type=%#x payload=%d, want SIMPLE/58", frame.Type, len(frame.Payload))
+	if frame.Type != protocol.TypeStatusSimple || len(frame.Payload) != 64 {
+		t.Fatalf("status frame type=%#x payload=%d, want SIMPLE/64", frame.Type, len(frame.Payload))
 	}
 	if session.selectedStatusType() != protocol.StatusSimple {
 		t.Fatalf("session status type = %v, want SIMPLE", session.selectedStatusType())
@@ -122,27 +121,26 @@ func TestHubReplacesPendingStatusWithLatest(t *testing.T) {
 	hub.Publish(latest)
 
 	got := <-subscriber.queue
-	want := protocol.EncodeFull(latest)
-	if !bytes.Equal(got, want) {
-		t.Fatalf("pending frame is not the latest value")
+	if got != latest {
+		t.Fatalf("pending status is not the latest value")
 	}
 }
 
-func TestHubEncodesSubscriberFormat(t *testing.T) {
-	hub := NewHub()
-	simple := newSubscriber(protocol.StatusSimple)
-	full := newSubscriber(protocol.StatusFull)
-	hub.add(simple)
-	hub.add(full)
-	defer hub.remove(simple)
-	defer hub.remove(full)
-
-	hub.Publish(model.FullStatus{})
-	if got := len(<-simple.queue); got != 66 {
-		t.Fatalf("SIMPLE frame length = %d, want 66", got)
-	}
-	if got := len(<-full.queue); got != 132 {
-		t.Fatalf("FULL frame length = %d, want 132", got)
+func TestSessionEncodesSubscriberFormat(t *testing.T) {
+	for _, statusType := range []protocol.StatusType{protocol.StatusSimple, protocol.StatusFull} {
+		client, _, hub := startPipeSession(t, time.Second, time.Second)
+		writeAll(t, client, protocol.EncodeSubscribeRequest(statusType))
+		assertACK(t, client, protocol.SubscribeSuccess)
+		hub.Publish(model.FullStatus{})
+		frame := readFrame(t, client, time.Second)
+		_ = client.Close()
+		wantType, size := protocol.TypeStatusSimple, 64
+		if statusType == protocol.StatusFull {
+			wantType, size = protocol.TypeStatusFull, 136
+		}
+		if frame.Type != wantType || len(frame.Payload) != size {
+			t.Fatalf("status frame type=%#x payload=%d, want %#x/%d", frame.Type, len(frame.Payload), wantType, size)
+		}
 	}
 }
 
@@ -169,9 +167,9 @@ func TestBlockedSubscriberCannotBlockPublishOrAnotherSubscriber(t *testing.T) {
 		t.Fatal("Hub.Publish blocked on a full subscriber queue")
 	}
 	select {
-	case frame := <-active.queue:
-		if len(frame) != 66 {
-			t.Fatalf("active subscriber frame length = %d", len(frame))
+	case status := <-active.queue:
+		if status.UsedSatellites != 2 {
+			t.Fatalf("active subscriber satellites = %d, want 2", status.UsedSatellites)
 		}
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("active subscriber did not receive publication")

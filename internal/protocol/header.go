@@ -8,7 +8,8 @@ import (
 const (
 	Magic            = "GNSS"
 	Version1   uint8 = 1
-	Version          = Version1
+	Version2   uint8 = 2
+	Version          = Version2
 	HeaderSize       = 8
 	MaxPayload       = 1024
 )

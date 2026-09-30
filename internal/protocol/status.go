@@ -8,10 +8,10 @@ import (
 )
 
 const (
-	simplePayloadSize = 58
-	fullPayloadSize   = 124
+	simplePayloadSize = 64
+	fullPayloadSize   = 136
 	simpleMask        = uint64(1<<9) - 1
-	fullMask          = uint64(1<<29) - 1
+	fullMask          = uint64(1<<30) - 1
 )
 
 func EncodeSimple(status model.SimpleStatus) []byte {
@@ -26,6 +26,7 @@ func EncodeSimple(status model.SimpleStatus) []byte {
 	sanitizeFloat32(&mask, model.SimpleCourseValid, &status.CourseOverGroundDeg, angle32)
 	sanitizeValid(&mask, model.SimpleValidValid, &status.Valid)
 	zeroUint8IfOff(mask, model.SimpleUsedSatellitesValid, &status.UsedSatellites)
+	quality := sanitizeTimeQuality(status.TimeQuality, mask&model.SimpleUTCValid != 0, mask&model.SimpleRecvValid != 0)
 
 	payload := make([]byte, simplePayloadSize)
 	binary.BigEndian.PutUint64(payload[0:8], mask)
@@ -38,11 +39,14 @@ func EncodeSimple(status model.SimpleStatus) []byte {
 	binary.BigEndian.PutUint32(payload[52:56], math.Float32bits(status.CourseOverGroundDeg))
 	payload[56] = status.Valid
 	payload[57] = status.UsedSatellites
+	payload[58] = quality.State
+	payload[59] = quality.Reason
+	binary.BigEndian.PutUint32(payload[60:64], quality.TimeoutMillis)
 	return frame(TypeStatusSimple, payload)
 }
 
 func EncodeFull(status model.FullStatus) []byte {
-	mask := status.FieldValidityMask & fullMask
+	mask := status.FieldValidityMask & fullMask &^ model.FullTimeRMSValid
 
 	zeroUint64IfOff(mask, model.FullUTCValid, &status.UTCTime)
 	zeroUint64IfOff(mask, model.FullRecvValid, &status.RecvTime)
@@ -73,6 +77,10 @@ func EncodeFull(status model.FullStatus) []byte {
 	sanitizeFloat32(&mask, model.FullGSTLatitudeErrorValid, &status.GSTLatitudeError, nonnegative32)
 	sanitizeFloat32(&mask, model.FullGSTLongitudeErrorValid, &status.GSTLongitudeError, nonnegative32)
 	sanitizeFloat32(&mask, model.FullGSTAltitudeErrorValid, &status.GSTAltitudeError, nonnegative32)
+	quality := sanitizeTimeQuality(status.TimeQuality, mask&model.FullUTCValid != 0, mask&model.FullRecvValid != 0)
+	if quality.RMSValid {
+		mask |= model.FullTimeRMSValid
+	}
 
 	payload := make([]byte, fullPayloadSize)
 	binary.BigEndian.PutUint64(payload[0:8], mask)
@@ -105,6 +113,11 @@ func EncodeFull(status model.FullStatus) []byte {
 	binary.BigEndian.PutUint32(payload[112:116], math.Float32bits(status.GSTLatitudeError))
 	binary.BigEndian.PutUint32(payload[116:120], math.Float32bits(status.GSTLongitudeError))
 	binary.BigEndian.PutUint32(payload[120:124], math.Float32bits(status.GSTAltitudeError))
+	payload[124] = quality.State
+	payload[125] = quality.Reason
+	binary.BigEndian.PutUint16(payload[126:128], quality.Samples)
+	binary.BigEndian.PutUint32(payload[128:132], quality.TimeoutMillis)
+	binary.BigEndian.PutUint32(payload[132:136], math.Float32bits(quality.RMS))
 	return frame(TypeStatusFull, payload)
 }
 

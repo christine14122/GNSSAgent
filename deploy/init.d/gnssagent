@@ -15,6 +15,13 @@ fi
 : "${LOG_FILE:=/lib/firmware/gnssagent/log/gnssagent.log}"
 : "${LOG_MAX_BYTES:=8388608}"
 : "${CONSOLE_LOG:=/var/volatile/gnssagent-console.log}"
+: "${TIME_RMS_ENTER:=2}"
+: "${TIME_RMS_EXIT:=5}"
+: "${TIME_RMS_SPREAD:=1}"
+: "${TIME_CONFIRM_CYCLES:=10}"
+: "${TIME_EXIT_CYCLES:=3}"
+: "${TIME_GST_TIMEOUT:=3s}"
+: "${TIME_STEP_TOLERANCE:=500ms}"
 
 SCRIPT_PATH=$0
 SUPERVISOR_TOKEN=__gnssagent_supervise__
@@ -84,7 +91,14 @@ supervise() {
             --max-remote-connections "$MAX_REMOTE_CONNECTIONS" \
             --log-level "$LOG_LEVEL" \
             --log-file "$LOG_FILE" \
-            --log-max-bytes "$LOG_MAX_BYTES"
+            --log-max-bytes "$LOG_MAX_BYTES" \
+            --time-rms-enter "$TIME_RMS_ENTER" \
+            --time-rms-exit "$TIME_RMS_EXIT" \
+            --time-rms-spread "$TIME_RMS_SPREAD" \
+            --time-confirm-cycles "$TIME_CONFIRM_CYCLES" \
+            --time-exit-cycles "$TIME_EXIT_CYCLES" \
+            --time-gst-timeout "$TIME_GST_TIMEOUT" \
+            --time-step-tolerance "$TIME_STEP_TOLERANCE"
         started_at=$(date +%s)
         "$@" >&3 2>&1 </dev/null &
         child_pid=$!
