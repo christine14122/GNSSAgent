@@ -86,7 +86,7 @@ func TestLoopbackSenderRestartDoesNotLeakPriorPosition(t *testing.T) {
 	defer secondSender.Close()
 	sendDatagram(t, secondSender, nmeaFrame("GNGGA,123520.00,,,,,1,05,1.0,5.0,M,0.0,M,,"))
 	sendDatagram(t, secondSender, nmeaFrame("GNGGA,123521.00,,,,,1,05,1.0,5.0,M,0.0,M,,"))
-	frame := readWireFrame(t, client, time.Second)
+	frame := readWireFrame(t, client, 2*time.Second)
 	mask := binary.BigEndian.Uint64(frame[8:16])
 	if mask&(model.SimpleLatitudeValid|model.SimpleLongitudeValid) != 0 {
 		t.Fatalf("old sender position leaked into new cycle: mask=%#x", mask)

@@ -11,15 +11,15 @@ import (
 )
 
 const (
-	defaultSubscriptionTimeout = 5 * time.Second
+	defaultSubscriptionTimeout = 60 * time.Second
 	defaultWriteTimeout        = 3 * time.Second
 )
 
 type session struct {
-	conn             net.Conn
-	hub              *Hub
-	subscribeTimeout time.Duration
-	writeTimeout     time.Duration
+	conn              net.Conn
+	hub               *Hub
+	subscribeDeadline time.Time
+	writeTimeout      time.Duration
 
 	stateMu    sync.RWMutex
 	subscribed bool
@@ -35,17 +35,17 @@ type session struct {
 
 func newSession(conn net.Conn, hub *Hub, subscribeTimeout, writeTimeout time.Duration) *session {
 	return &session{
-		conn:             conn,
-		hub:              hub,
-		subscribeTimeout: subscribeTimeout,
-		writeTimeout:     writeTimeout,
-		done:             make(chan struct{}),
+		conn:              conn,
+		hub:               hub,
+		subscribeDeadline: time.Now().Add(subscribeTimeout),
+		writeTimeout:      writeTimeout,
+		done:              make(chan struct{}),
 	}
 }
 
 func (s *session) run() {
 	defer s.close()
-	if err := s.conn.SetReadDeadline(time.Now().Add(s.subscribeTimeout)); err != nil {
+	if err := s.conn.SetReadDeadline(s.subscribeDeadline); err != nil {
 		return
 	}
 
@@ -130,7 +130,11 @@ func (s *session) writeStatuses(subscriber *subscriber) {
 func (s *session) writeFrame(frame []byte) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	return s.writeFrameLocked(frame, time.Now().Add(s.writeTimeout))
+	deadline := time.Now().Add(s.writeTimeout)
+	if !s.isSubscribed() && s.subscribeDeadline.Before(deadline) {
+		deadline = s.subscribeDeadline
+	}
+	return s.writeFrameLocked(frame, deadline)
 }
 
 func (s *session) writeStatus(status model.FullStatus, statusType protocol.StatusType) error {

@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"gnssagent/internal/aggregate"
 	"gnssagent/internal/model"
 	"gnssagent/internal/nmea"
 	"gnssagent/internal/timequality"
@@ -84,7 +85,7 @@ func TestQueuedTrustedStatusIsDowngradedAfterExpiry(t *testing.T) {
 	h.app.onTick(base.Add(20 * time.Second))
 	close(gate)
 	defer h.stop(t)
-	for i := 0; i < 10; i++ {
+	for i := 0; i < 2; i++ {
 		status := receiveStatus(t, h.server.published)
 		if status.TimeQuality.State == uint8(timequality.Trusted) {
 			t.Fatalf("expired status published as Trusted: %+v", status.TimeQuality)
@@ -104,4 +105,48 @@ func TestTimeQualityInputResetRevokesWithoutNavigationFrame(t *testing.T) {
 	_ = receiveStatus(t, h.server.published)
 	sink.Reset()
 	assertNoStatus(t, h.server.published)
+}
+
+func TestInputResetDiscardsQueuedTrustedStatus(t *testing.T) {
+	h := startAppHarness(t, slog.LevelInfo)
+	defer h.stop(t)
+	cfg := timequality.DefaultConfig()
+	cfg.Window = 2
+	h.app.aggregateMu.Lock()
+	h.app.aggregator = aggregate.New(cfg)
+	h.app.aggregateMu.Unlock()
+	sink := h.sink(t)
+	feed := func(epoch int) {
+		stamp := h.startedAt.Add(time.Duration(epoch) * time.Second)
+		sink.Sentence(nmea.Sentence{Kind: nmea.KindRMC, ReceivedAt: stamp, RMC: &nmea.RMC{
+			MillisOfDay: int64(epoch) * 1000, TimeValid: true,
+			Date:   nmea.Field[time.Time]{Value: h.startedAt, Valid: true},
+			Status: nmea.Field[byte]{Value: 'A', Valid: true},
+		}})
+		sink.Sentence(nmea.Sentence{Kind: nmea.KindGST, ReceivedAt: stamp, GST: &nmea.GST{
+			MillisOfDay: int64(epoch) * 1000, TimeValid: true,
+			PseudorangeRMS: nmea.Field[float64]{Value: 1, Valid: true},
+		}})
+		h.app.onFlushDeadline(stamp.Add(aggregateFlushDelay))
+	}
+	feed(0)
+	_ = receiveStatus(t, h.server.published)
+	feed(1)
+	h.app.publishMu.Lock()
+	queuedTrust := len(h.app.publishQueue) == 1 && h.app.publishQueue[0].TimeQuality.State == uint8(timequality.Trusted)
+	h.app.publishMu.Unlock()
+	if !queuedTrust {
+		t.Fatal("expected a trusted cycle waiting for the publication interval")
+	}
+	sink.Reset()
+	select {
+	case status := <-h.server.published:
+		t.Fatalf("pre-reset status was published after reset: %+v", status.TimeQuality)
+	case <-time.After(1200 * time.Millisecond):
+	}
+	feed(2)
+	status := receiveStatus(t, h.server.published)
+	if status.TimeQuality.State != uint8(timequality.Warming) || status.TimeQuality.Samples != 1 {
+		t.Fatalf("recovery did not start a new confirmation window: %+v", status.TimeQuality)
+	}
 }

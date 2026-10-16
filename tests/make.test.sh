@@ -72,6 +72,12 @@ for makefile in makefile makefile_CCU makefile_HF makefile_MultibandRadio makefi
     [ ! -e "$project_dir/release" ] || fail "$makefile install changed the output directory"
 done
 
+# Installation reads the build output independently of the caller's directory.
+mkdir -p "$project_dir/release" "$tmp_dir/caller/work" "$tmp_dir/Bin"
+printf 'multiband-radio artifact\n' > "$project_dir/release/GNSSAgent-MultibandRadio"
+(cd "$tmp_dir/caller/work" && make -f "$make_dir/makefile_MultibandRadio" install)
+cmp "$project_dir/release/GNSSAgent-MultibandRadio" "$tmp_dir/Bin/GNSSAgent" || fail 'MultibandRadio install copied the wrong artifact'
+
 artifact_names='GNSSAgent-CCU GNSSAgent-MultibandRadio GNSSAgent-MultibandHandheld GNSSAgent-SmallRadio GNSSAgent-HF'
 dist_dir="$project_dir/release"
 

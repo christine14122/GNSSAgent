@@ -15,7 +15,7 @@ import (
 	"gnssagent/internal/udpinput"
 )
 
-const aggregateFlushDelay = 1500 * time.Millisecond
+const publishInterval = time.Second
 
 type UDPInput interface {
 	Run(context.Context, udpinput.Sink) error
@@ -187,18 +187,32 @@ func (a *App) waitForComponents(serverDone, inputDone <-chan error) {
 }
 
 func (a *App) publishLoop(ctx context.Context) {
+	var nextPublish time.Time
+	timer := time.NewTimer(time.Hour)
+	timer.Stop()
+	defer timer.Stop()
 	for {
 		select {
 		case <-a.publishWake:
-			for {
-				status, ok := a.nextStatus()
-				if !ok {
-					break
+			if delay := time.Until(nextPublish); delay > 0 {
+				timer.Reset(delay)
+				select {
+				case <-timer.C:
+				case <-ctx.Done():
+					return
 				}
-				status.TimeQuality.Expire(a.clock())
-				a.server.Publish(status)
-				a.stats.RecordPublishedCycle()
 			}
+			if ctx.Err() != nil {
+				return
+			}
+			status, ok := a.nextStatus()
+			if !ok {
+				continue
+			}
+			status.TimeQuality.Expire(a.clock())
+			a.server.Publish(status)
+			nextPublish = time.Now().Add(publishInterval)
+			a.stats.RecordPublishedCycle()
 		case <-ctx.Done():
 			return
 		}
@@ -207,7 +221,8 @@ func (a *App) publishLoop(ctx context.Context) {
 
 func (a *App) offerStatus(status model.FullStatus) {
 	a.publishMu.Lock()
-	a.publishQueue = append(a.publishQueue, status)
+	// Coalesce completed cycles while the publisher waits or is busy.
+	a.publishQueue = append(a.publishQueue[:0], status)
 	a.publishMu.Unlock()
 	select {
 	case a.publishWake <- struct{}{}:
@@ -222,12 +237,7 @@ func (a *App) nextStatus() (model.FullStatus, bool) {
 		return model.FullStatus{}, false
 	}
 	status := a.publishQueue[0]
-	if len(a.publishQueue) == 1 {
-		a.publishQueue = nil
-	} else {
-		a.publishQueue[0] = model.FullStatus{}
-		a.publishQueue = a.publishQueue[1:]
-	}
+	a.publishQueue = nil
 	return status, true
 }
 
@@ -314,12 +324,12 @@ func (a *App) onFlushDeadline(now time.Time) {
 	}
 	status, ready := a.aggregator.FlushExpired(now)
 	hadGSV := a.currentHasGSV
-	a.flushDeadline = time.Time{}
-	a.currentHasGSV = false
 	if ready {
+		a.currentHasGSV = false
 		a.recordGSVCompleteness(status, hadGSV)
 		a.offerStatus(status)
 	}
+	a.scheduleFlushLocked()
 	a.aggregateMu.Unlock()
 }
 
@@ -376,15 +386,12 @@ func (s *inputSink) Sentence(sentence nmea.Sentence) {
 		s.app.recordGSVCompleteness(status, hadGSV)
 		s.app.offerStatus(status)
 		s.app.currentHasGSV = sentence.Kind == nmea.KindGSV
-		s.app.scheduleFlushLocked(sentence.ReceivedAt)
 	} else {
 		if sentence.Kind == nmea.KindGSV {
 			s.app.currentHasGSV = true
 		}
-		if s.app.flushDeadline.IsZero() {
-			s.app.scheduleFlushLocked(sentence.ReceivedAt)
-		}
 	}
+	s.app.scheduleFlushLocked()
 	s.app.aggregateMu.Unlock()
 }
 
@@ -394,15 +401,23 @@ func (s *inputSink) Reset() {
 	s.app.flushDeadline = time.Time{}
 	s.app.currentHasGSV = false
 	s.app.flushTimer.Stop()
+	s.app.publishMu.Lock()
+	s.app.publishQueue = nil
+	s.app.publishMu.Unlock()
 	s.app.aggregateMu.Unlock()
 }
 
-func (a *App) scheduleFlushLocked(firstReceivedAt time.Time) {
-	if firstReceivedAt.IsZero() {
-		firstReceivedAt = a.clock()
+func (a *App) scheduleFlushLocked() {
+	deadline := a.aggregator.FlushDeadline()
+	if deadline.Equal(a.flushDeadline) {
+		return
 	}
-	a.flushDeadline = firstReceivedAt.Add(aggregateFlushDelay)
-	a.flushTimer.Reset(a.flushDeadline)
+	a.flushDeadline = deadline
+	if deadline.IsZero() {
+		a.flushTimer.Stop()
+	} else {
+		a.flushTimer.Reset(deadline)
+	}
 }
 
 func (a *App) recordGSVCompleteness(status model.FullStatus, hadGSV bool) {

@@ -82,6 +82,7 @@ func (s *Server) Run(ctx context.Context) error {
 			}
 			return err
 		}
+		session := newSession(conn, s.hub, defaultSubscriptionTimeout, defaultWriteTimeout)
 		if s.observer != nil {
 			s.observer.RecordTCPConnection()
 		}
@@ -102,7 +103,6 @@ func (s *Server) Run(ctx context.Context) error {
 			continue
 		}
 
-		session := newSession(conn, s.hub, defaultSubscriptionTimeout, defaultWriteTimeout)
 		session.observer = s.observer
 		s.sessionsMu.Lock()
 		s.sessions[session] = struct{}{}

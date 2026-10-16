@@ -17,6 +17,8 @@ import (
 	"gnssagent/internal/udpinput"
 )
 
+const aggregateFlushDelay = 1500 * time.Millisecond
+
 type fakeUDPInput struct {
 	started chan udpinput.Sink
 	stopped chan struct{}
@@ -267,7 +269,7 @@ func TestSlowPublisherDoesNotBlockUDPSink(t *testing.T) {
 	harness.stop(t)
 }
 
-func TestSlowPublisherDoesNotDropGloballyQueuedStatuses(t *testing.T) {
+func TestSlowPublisherKeepsLatestQueuedStatus(t *testing.T) {
 	gate := make(chan struct{})
 	harness := startAppHarnessWithGate(t, slog.LevelInfo, gate)
 	sink := harness.sink(t)
@@ -284,10 +286,14 @@ func TestSlowPublisherDoesNotDropGloballyQueuedStatuses(t *testing.T) {
 	sink.Sentence(ggaSentence(base.Add(3*time.Second), 4, 1))
 	close(gate)
 
-	for index := 0; index < 3; index++ {
-		_ = receiveStatus(t, harness.server.published)
+	defer harness.stop(t)
+	for _, second := range []int{0, 2} {
+		status := receiveStatus(t, harness.server.published)
+		if want := uint64(base.Add(time.Duration(second) * time.Second).UnixMilli()); status.RecvTime != want {
+			t.Fatalf("received time = %d, want %d", status.RecvTime, want)
+		}
 	}
-	harness.stop(t)
+	assertNoStatus(t, harness.server.published)
 }
 
 func TestShutdownStopsUDPAndTCP(t *testing.T) {
@@ -552,7 +558,7 @@ func receiveStatus(t *testing.T, statuses <-chan model.FullStatus) model.FullSta
 	select {
 	case status := <-statuses:
 		return status
-	case <-time.After(time.Second):
+	case <-time.After(2 * time.Second):
 		t.Fatal("status was not published")
 		return model.FullStatus{}
 	}

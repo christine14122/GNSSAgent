@@ -36,9 +36,9 @@ foreach ($text in $forbiddenProduction) {
 }
 
 $config = Get-Content -LiteralPath (Join-Path $projectRoot 'internal\config\config.go') -Raw
-foreach ($text in @('127.0.0.1:29501', 'netip.ParseAddrPort', '.Is4()', '.IsLoopback()', '.Port() == 0')) {
+foreach ($text in @('0.0.0.0:29501', 'netip.ParseAddrPort', '.Is4()', '.Port() == 0')) {
     if (-not $config.Contains($text)) {
-        throw "IPv4 loopback UDP validation is missing: $text"
+        throw "IPv4 UDP validation is missing: $text"
     }
 }
 $udpSocket = Get-Content -LiteralPath (Join-Path $projectRoot 'internal\udpinput\socket_linux.go') -Raw

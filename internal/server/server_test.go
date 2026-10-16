@@ -60,8 +60,8 @@ func TestSessionSkipsGarbageUnknownAndClientACKFrames(t *testing.T) {
 }
 
 func TestSessionSubscriptionTimeoutClosesConnection(t *testing.T) {
-	if defaultSubscriptionTimeout != 5*time.Second {
-		t.Fatalf("production subscription timeout = %v, want 5s", defaultSubscriptionTimeout)
+	if defaultSubscriptionTimeout != 60*time.Second {
+		t.Fatalf("production subscription timeout = %v, want 60s", defaultSubscriptionTimeout)
 	}
 	client, session, _ := startPipeSession(t, 30*time.Millisecond, 200*time.Millisecond)
 	defer client.Close()
@@ -74,6 +74,84 @@ func TestSessionSubscriptionTimeoutClosesConnection(t *testing.T) {
 	buffer := make([]byte, 1)
 	if _, err := client.Read(buffer); !errors.Is(err, io.EOF) {
 		t.Fatalf("client read error = %v, want EOF", err)
+	}
+}
+
+func TestSessionSubscriptionDeadlineClosesBlockedErrorACK(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		frame []byte
+	}{
+		{"invalid status", rawFrame(protocol.Version, protocol.TypeSubscribeRequest, []byte{0xff})},
+		{"unsupported version", rawFrame(protocol.Version+1, protocol.TypeSubscribeRequest, []byte{byte(protocol.StatusSimple)})},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client, session, _ := startPipeSession(t, 80*time.Millisecond, time.Second)
+			defer client.Close()
+			defer session.close()
+			writeAll(t, client, tc.frame)
+			// Leave the error ACK unread so the server blocks in Write.
+			select {
+			case <-session.done:
+			case <-time.After(500 * time.Millisecond):
+				t.Fatal("blocked error ACK outlived the subscription deadline")
+			}
+			if _, err := client.Read(make([]byte, 1)); !errors.Is(err, io.EOF) {
+				t.Fatalf("client read error = %v, want EOF", err)
+			}
+		})
+	}
+}
+
+func TestSessionSubscribedACKIgnoresInitialDeadline(t *testing.T) {
+	client, session, _ := startPipeSession(t, 80*time.Millisecond, time.Second)
+	defer client.Close()
+	defer session.close()
+	writeAll(t, client, protocol.EncodeSubscribeRequest(protocol.StatusSimple))
+	assertACK(t, client, protocol.SubscribeSuccess)
+	assertReadTimeout(t, client, 120*time.Millisecond)
+	writeAll(t, client, protocol.EncodeSubscribeRequest(protocol.StatusSimple))
+	assertACK(t, client, protocol.SubscribeAlreadySubscribed)
+}
+
+type subscriptionDeadlineConn struct {
+	net.Conn
+	deadlines chan time.Time
+}
+
+func (c *subscriptionDeadlineConn) SetReadDeadline(deadline time.Time) error {
+	c.deadlines <- deadline
+	return c.Conn.SetReadDeadline(deadline)
+}
+
+func TestSessionSubscriptionDeadlineStartsBeforeRunAndClearsOnSuccess(t *testing.T) {
+	serverConn, client := net.Pipe()
+	defer client.Close()
+	conn := &subscriptionDeadlineConn{Conn: serverConn, deadlines: make(chan time.Time, 4)}
+	before := time.Now()
+	session := newSession(conn, NewHub(), defaultSubscriptionTimeout, time.Second)
+	after := time.Now()
+	defer session.close()
+	go session.run()
+	select {
+	case deadline := <-conn.deadlines:
+		if deadline.Before(before.Add(60*time.Second)) || deadline.After(after.Add(60*time.Second)) {
+			t.Fatalf("subscription deadline = %v, want 60s from connection acceptance", deadline)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("initial subscription deadline was not set")
+	}
+	writeAll(t, client, rawFrame(protocol.Version, protocol.TypeSubscribeRequest, []byte{0xff}))
+	assertACK(t, client, protocol.SubscribeInvalidStatusType)
+	writeAll(t, client, protocol.EncodeSubscribeRequest(protocol.StatusSimple))
+	assertACK(t, client, protocol.SubscribeSuccess)
+	select {
+	case deadline := <-conn.deadlines:
+		if !deadline.IsZero() {
+			t.Fatalf("subscription deadline reset instead of cleared: %v", deadline)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("successful subscription did not clear the deadline")
 	}
 }
 

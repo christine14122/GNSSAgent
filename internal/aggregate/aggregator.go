@@ -74,6 +74,14 @@ func (a *Aggregator) Add(sentence nmea.Sentence) (model.FullStatus, bool) {
 	return model.FullStatus{}, false
 }
 
+// FlushDeadline belongs to the active cycle, never to a discarded sentence.
+func (a *Aggregator) FlushDeadline() time.Time {
+	if a.current == nil {
+		return time.Time{}
+	}
+	return a.current.firstReceivedAt.Add(flushDelay)
+}
+
 func (a *Aggregator) FlushExpired(now time.Time) (model.FullStatus, bool) {
 	if a.current == nil || now.Sub(a.current.firstReceivedAt) < flushDelay {
 		return model.FullStatus{}, false

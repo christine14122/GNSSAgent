@@ -38,7 +38,7 @@ func TestUDPToTCPPublishesRMSConvergenceForBothSubscriptions(t *testing.T) {
 			sendGST(0)
 			for i := 1; i <= 2; i++ {
 				sendRMC(i)
-				status := readWireFrame(t, client, time.Second)
+				status := readWireFrame(t, client, 2*time.Second)
 				wantStatus := protocol.TypeStatusSimple
 				wantSize, qualityOffset, timeoutOffset := 72, 66, 68
 				if kind == protocol.StatusFull {

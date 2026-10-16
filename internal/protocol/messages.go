@@ -19,7 +19,6 @@ const (
 	SubscribeServerFull         SubscribeResult = 1
 	SubscribeAlreadySubscribed  SubscribeResult = 2
 	SubscribeUnsupportedVersion SubscribeResult = 3
-	SubscribeInternalError      SubscribeResult = 4
 	SubscribeInvalidStatusType  SubscribeResult = 5
 )
 

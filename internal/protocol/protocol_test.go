@@ -48,7 +48,6 @@ func TestProtocolEnumValues(t *testing.T) {
 		{name: "subscribe server full", got: uint8(SubscribeServerFull), want: 1},
 		{name: "subscribe already subscribed", got: uint8(SubscribeAlreadySubscribed), want: 2},
 		{name: "subscribe unsupported version", got: uint8(SubscribeUnsupportedVersion), want: 3},
-		{name: "subscribe internal error", got: uint8(SubscribeInternalError), want: 4},
 		{name: "subscribe invalid status type", got: uint8(SubscribeInvalidStatusType), want: 5},
 
 		{name: "GNSS GPS", got: uint8(TypeGPS), want: 1},
