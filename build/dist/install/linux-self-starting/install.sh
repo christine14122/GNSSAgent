@@ -20,7 +20,7 @@ for FILE in GNSSAgent-CCU gnssagentctl.sh start.sh stop.sh restart.sh status.sh;
     [ -f "$INSTALL_PATH/$FILE" ] || { echo "Missing deployment file: $INSTALL_PATH/$FILE" >&2; exit 1; }
 done
 [ -f "$SCRIPT_DIR/gnssagent.init.d" ] || { echo 'Missing gnssagent.init.d template' >&2; exit 1; }
-for TOOL in chkconfig flock readlink awk nohup sed grep chmod mv; do
+for TOOL in chkconfig flock readlink awk nohup sed grep chmod mv mktemp tr; do
     command -v "$TOOL" >/dev/null 2>&1 || { echo "Required command missing: $TOOL" >&2; exit 1; }
 done
 [ -d /var/lock/subsys ] || { echo 'Missing SysV lock directory /var/lock/subsys' >&2; exit 1; }
@@ -48,6 +48,9 @@ if [ "$START_NOW" -eq 0 ]; then
     fi
 fi
 if [ "$START_NOW" -eq 1 ]; then
-    "$INIT_DST" start
-    "$INIT_DST" status
+    if "$INIT_DST" start; then
+        "$INIT_DST" status || true
+    else
+        echo "Warning: GNSSAgent installed, but not started; complete communication parameters and start it later" >&2
+    fi
 fi

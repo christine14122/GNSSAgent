@@ -7,6 +7,8 @@
 *.test
 *.out
 coverage.txt
+gnssagent.pid
+gnssagent.pid.*
 
 # Local tool state and architecture drafts
 /.codegraph/
