@@ -1,0 +1,22 @@
+syntax = "proto3";
+package tncs.api;
+
+// Wire-compatible subset of TNCS api_tncs_msg.proto / api_local_config.proto.
+// The codec implements these messages without a runtime protobuf dependency.
+enum MsgType {
+  MSG_TYPE_UNSPECIFIED = 0;
+  MSG_TYPE_SET_LOCAL_TIME_REQ = 101008;
+  MSG_TYPE_SET_LOCAL_TIME_RESP = 201008;
+}
+message TncsMsg {
+  MsgType msg_type = 1;
+  bytes payload = 2;
+}
+message SetLocalTimeRequest {
+  int64 timestamp_ms = 1;
+  bool trusted = 2;
+}
+message SetLocalTimeResponse {
+  bool success = 1;
+  string reason = 2;
+}

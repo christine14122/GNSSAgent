@@ -16,6 +16,7 @@ import (
 	"gnssagent/internal/config"
 	"gnssagent/internal/observe"
 	"gnssagent/internal/server"
+	"gnssagent/internal/tncstime"
 	"gnssagent/internal/udpinput"
 )
 
@@ -81,6 +82,7 @@ func run(args []string) error {
 	statusServer.SetObserver(stats)
 	udpManager := udpinput.NewManager(cfg.UDPListenAddress)
 	service := app.New(udpManager, statusServer, stats, logger, cfg.TimeQuality)
+	service.SetTimeReporter(timeReporterForTarget(buildinfo.Target, logger))
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -105,4 +107,11 @@ func parseLogLevel(text string) (slog.Level, error) {
 	default:
 		return 0, fmt.Errorf("unsupported log level %q", text)
 	}
+}
+
+func timeReporterForTarget(target string, logger *slog.Logger) app.TimeReporter {
+	if target == "ccu" {
+		return tncstime.New(logger)
+	}
+	return nil
 }

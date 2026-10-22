@@ -5,6 +5,14 @@ import (
 	"testing"
 )
 
+func TestTimeReporterOnlyEnabledForCCU(t *testing.T) {
+	for _, target := range []string{"ccu", "generic", "hf", "small-radio", "multiband-radio", "multiband-handheld", ""} {
+		if enabled := timeReporterForTarget(target, nil) != nil; enabled != (target == "ccu") {
+			t.Fatalf("target %q enabled=%v", target, enabled)
+		}
+	}
+}
+
 func TestParseLogLevel(t *testing.T) {
 	for _, tc := range []struct {
 		text string

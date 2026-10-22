@@ -26,6 +26,12 @@ type StatusServer interface {
 	Publish(model.FullStatus)
 }
 
+// TimeReporter receives parsed sentences before aggregation or quality checks.
+type TimeReporter interface {
+	Run(context.Context)
+	Sentence(nmea.Sentence)
+}
+
 type intervalTicker interface {
 	C() <-chan time.Time
 	Stop()
@@ -70,13 +76,14 @@ type warningState struct {
 }
 
 type App struct {
-	input      UDPInput
-	server     StatusServer
-	stats      *observe.Stats
-	logger     *slog.Logger
-	ticker     intervalTicker
-	flushTimer deadlineTimer
-	clock      func() time.Time
+	timeReporter TimeReporter
+	input        UDPInput
+	server       StatusServer
+	stats        *observe.Stats
+	logger       *slog.Logger
+	ticker       intervalTicker
+	flushTimer   deadlineTimer
+	clock        func() time.Time
 
 	aggregateMu   sync.Mutex
 	aggregator    *aggregate.Aggregator
@@ -94,6 +101,9 @@ type App struct {
 	summary         observe.Snapshot
 	summaryInterval int
 }
+
+// SetTimeReporter must be called before Run. Only the CCU entry point installs it.
+func (a *App) SetTimeReporter(reporter TimeReporter) { a.timeReporter = reporter }
 
 func New(input UDPInput, server StatusServer, stats *observe.Stats, logger *slog.Logger, options ...timequality.Config) *App {
 	a := newApp(input, server, stats, logger, realTicker{ticker: time.NewTicker(time.Second)}, newRealDeadlineTimer(), time.Now)
@@ -130,6 +140,11 @@ func (a *App) Run(ctx context.Context) error {
 	defer cancel()
 	defer a.ticker.Stop()
 	defer a.flushTimer.Stop()
+	if a.timeReporter != nil {
+		done := make(chan struct{})
+		go func() { defer close(done); a.timeReporter.Run(ctx) }()
+		defer func() { cancel(); <-done }()
+	}
 
 	serverDone := make(chan error, 1)
 	inputDone := make(chan error, 1)
@@ -377,6 +392,9 @@ func (s *inputSink) DatagramReceived(bytes int) {
 }
 
 func (s *inputSink) Sentence(sentence nmea.Sentence) {
+	if s.app.timeReporter != nil {
+		s.app.timeReporter.Sentence(sentence)
+	}
 	s.app.stats.RecordValidNMEA(sentence.Talker, sentence.Kind, sentence.ReceivedAt)
 	s.app.recoverInput(sentence.ReceivedAt)
 	s.app.aggregateMu.Lock()
